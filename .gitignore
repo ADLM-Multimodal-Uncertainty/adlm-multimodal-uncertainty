@@ -1,0 +1,31 @@
+# Data (only the split assignment is committed)
+/data/raw/*
+/data/processed/*
+!/data/**/.gitkeep
+
+# Experiment artefacts
+outputs/
+multirun/
+wandb/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# Papers and slides
+*.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+.env

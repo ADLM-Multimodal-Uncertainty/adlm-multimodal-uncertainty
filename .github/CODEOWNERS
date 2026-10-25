@@ -1,0 +1,8 @@
+# Area ownership: a PR touching a path requests review from its owner.
+# Replace with each teammate's GitHub handle once they join the repo.
+
+/src/adlm_uq/data/        @Kalkan-Emre
+/src/adlm_uq/models/      @Kalkan-Emre
+/src/adlm_uq/uq/          @Kalkan-Emre
+/src/adlm_uq/evaluation/  @Kalkan-Emre
+/configs/                 @Kalkan-Emre
