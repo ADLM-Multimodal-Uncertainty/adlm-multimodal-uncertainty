@@ -6,6 +6,11 @@ Team: Larissa Manalil, Yannic Neu, Emre Kalkan.
 Research question: does adding clinical metadata to an image classifier reduce its epistemic
 uncertainty? Per test image, dEU = EU(image) - EU(image + metadata). Dataset: PAD-UFES-20.
 
+Related repos in the organization:
+[eda](https://github.com/ADLM-Multimodal-Uncertainty/eda) (data analysis) and
+[reports-and-presentations](https://github.com/ADLM-Multimodal-Uncertainty/reports-and-presentations)
+(slides, poster, report, roadmap, literature).
+
 ## Layout
 
 ```
@@ -21,7 +26,6 @@ data/               not committed (except splits/)
 docs/               code-related documentation
   diagrams/           architecture and data-flow diagrams
   cluster_guide.md    VPN, ssh, storage, SLURM
-  eda_plan.md         EDA plan and findings
 src/adlm_uq/        Python package
   data/               dataset, splits, metadata encoding, transforms
   models/             image encoder, tabular encoder, fusion
