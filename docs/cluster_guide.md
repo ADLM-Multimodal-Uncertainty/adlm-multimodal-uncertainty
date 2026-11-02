@@ -59,8 +59,8 @@ Data layout the code expects (set `DATA_ROOT`):
     ml python/uv
     cd /vol/miltank/users/$USER/code
     git clone <repo-url> adlm-multimodal-uncertainty && cd adlm-multimodal-uncertainty
-    export UV_CACHE_DIR=/meta/users/$USER/cache/uv
-    # create the environment from the repo's dependency file once it exists (same env for all three)
+    export UV_CACHE_DIR=/meta/users/$USER/.cache/uv
+    uv sync                       # creates .venv from uv.lock; same env for all three of us
 
 Put in `~/.bashrc` (that is allowed; it is a dotfile, not data):
 
@@ -71,7 +71,7 @@ Put in `~/.bashrc` (that is allowed; it is a dotfile, not data):
 
 ## 5. SLURM
 
-Submit: `sbatch scripts/slurm/<job>.sbatch`. Monitor: `squeue -u $USER`, `scontrol show job <id>`,
+Submit: `sbatch scripts/slurm/train.sbatch`. Monitor: `squeue -u $USER`, `scontrol show job <id>`,
 `sacct -j <id> --format=JobID,State,Elapsed,MaxRSS`. Cancel: `scancel <id>`.
 
 Two QoS:
@@ -79,14 +79,16 @@ Two QoS:
 - `master`: unlimited jobs, pre-empted by higher priority, not scheduled under full load. Use for sweeps.
 
 Rules
-- Request a GPU only if the job uses one. EDA and preprocessing: no `--gres`.
+- Request a GPU only if the job uses one.
 - Fewer than 32 CPUs, well below 128 GB RAM.
 - Long-running anything (training, preprocessing, downloads) goes through sbatch, not selene.
 - No training in notebooks.
 - All data, scripts, outputs, checkpoints on `/vol/miltank/...`.
 
-Job scripts go in `scripts/slurm/`. The first one everyone should run is a short GPU job that
-prints `nvidia-smi` and checks that torch sees the GPU.
+Templates in `scripts/slurm/`:
+- `smoke_test.sbatch`: 5-minute GPU job that prints `nvidia-smi` and imports torch. Run this first.
+- `train.sbatch`: single training run, config via Hydra overrides.
+- `ensemble_array.sbatch`: job array over fold x seed (25 tasks) for a deep ensemble.
 
 Job arrays: `#SBATCH --array=0-24%2` runs 25 tasks, 2 at a time (fits master-queuesave).
 `fold = SLURM_ARRAY_TASK_ID // 5`, `seed = SLURM_ARRAY_TASK_ID % 5`.
@@ -114,10 +116,10 @@ Use this for stepping through a batch, not for training.
 
 ## 7. Local development loop
 
-- Laptop: same environment, `DATA_ROOT` pointing at a folder with `metadata.csv` and a 100-200
-  image subset.
-- A one-epoch CPU run on that subset with small images should finish in under a minute; this is
-  the correctness check before every cluster run. Run the tests too.
+- Laptop: `uv sync`, `DATA_ROOT` pointing at a folder with `metadata.csv` and a 100-200 image subset.
+- A CPU run of `python -m src.train` on a tiny subset (small images, one epoch) must finish in
+  under a minute; this is the correctness check before every cluster run.
+- Tests: `uv run pytest -q`.
 - Commit, push, then `git pull` on selene and submit.
 
 ## 8. Checklist before any real run

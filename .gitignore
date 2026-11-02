@@ -1,7 +1,6 @@
 # Data (only the split assignment is committed)
-/data/raw/*
-/data/processed/*
-!/data/**/.gitkeep
+/data/*
+!/data/splits/
 
 # Experiment artefacts
 outputs/
@@ -29,3 +28,10 @@ __pycache__/
 .idea/
 .DS_Store
 .env
+
+# VPN configs and credentials
+*.ovpn
+auth.txt
+
+# Local copy of the PAD-UFES-20 metadata (public repo: not committed)
+/metadata/
