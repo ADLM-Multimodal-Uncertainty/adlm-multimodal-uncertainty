@@ -3,8 +3,9 @@
     scripts/local/run.sh experiment=draft_baseline
     scripts/local/run.sh experiment=draft_image_only data.root=/path/to/pad_ufes_20
 
-Writes to `run_dir`: the resolved `config.yaml`, `history.csv`, `best.pt` (best epoch by
-`train.monitor`), `test_metrics.json` and `test_predictions.csv`.
+Writes to `run_dir`: the resolved `config.yaml`, `history.csv` (train and validation loss and
+metrics per epoch), `best.pt` (best epoch by `train.monitor`), `test_metrics.json`,
+`test_predictions.csv`, `curves.png` and `confusion_matrix.png`.
 """
 
 from __future__ import annotations
@@ -25,9 +26,10 @@ from torch.utils.data import DataLoader
 
 from src import CLASSES
 from src.data.dataset import build_fold
-from src.evaluate import evaluate_run, predict, resolve_device
-from src.metrics import summary_metrics
+from src.evaluate import Predictions, evaluate_run, predict, resolve_device
+from src.metrics import METRIC_NAMES, summary_metrics
 from src.models import MultimodalClassifier, build_model
+from src.visualize import plot_run
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +45,11 @@ def class_weights(labels: np.ndarray, device: torch.device) -> torch.Tensor:
     if (counts == 0).any():
         raise ValueError("weighted_loss needs every class in the training partition")
     return torch.tensor(len(labels) / (len(CLASSES) * counts), dtype=torch.float32, device=device)
+
+
+def score(prediction: Predictions, prefix: str) -> dict[str, float]:
+    metrics = summary_metrics(prediction.labels, prediction.probs.argmax(axis=1), len(CLASSES))
+    return {f"{prefix}_{name}": value for name, value in metrics.items()}
 
 
 def train_epoch(
@@ -89,19 +96,32 @@ def main(cfg: DictConfig) -> None:
     weight = class_weights(data.train.labels, device) if cfg.train.weighted_loss else None
     criterion = instantiate(cfg.train.loss, weight=weight)
 
+    train_eval_loader = None
+    if cfg.train.track_train_metrics:
+        train_eval_loader = DataLoader(
+            data.train, batch_size=cfg.train.batch_size, num_workers=cfg.data.num_workers
+        )
+
     monitor = cfg.train.monitor
     best = -np.inf
     with (run_dir / "history.csv").open("w", newline="") as f:
-        fields = ["epoch", "train_loss", "val_accuracy", "val_balanced_accuracy", "val_macro_f1"]
+        fields = ["epoch", "train_loss", "val_loss"]
+        if train_eval_loader is not None:
+            fields += [f"train_{name}" for name in METRIC_NAMES]
+        fields += [f"val_{name}" for name in METRIC_NAMES]
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         for epoch in range(1, cfg.train.epochs + 1):
             train_loss = train_epoch(model, train_loader, optimizer, criterion, device)
             model.eval()
-            probs, labels = predict(model, val_loader, device)
-            val = summary_metrics(labels, probs.argmax(axis=1), len(CLASSES))
-            record = {"epoch": epoch, "train_loss": train_loss}
-            record.update({f"val_{k}": v for k, v in val.items()})
+            val = predict(model, val_loader, device, criterion)
+            record = {"epoch": epoch, "train_loss": train_loss, "val_loss": val.loss}
+            if train_eval_loader is not None:
+                # The training transform draws random numbers (flip); restore the generator so
+                # tracking train metrics does not change the batches or dropout of later epochs.
+                with torch.random.fork_rng(devices=[]):
+                    record.update(score(predict(model, train_eval_loader, device), "train"))
+            record.update(score(val, "val"))
             writer.writerow(record)
             f.flush()
             log.info(json.dumps(record))
@@ -113,6 +133,7 @@ def main(cfg: DictConfig) -> None:
                 )
 
     metrics = evaluate_run(run_dir, device)
+    plot_run(run_dir)
     log.info(
         "best %s %.4f; test accuracy %.4f, balanced accuracy %.4f, macro-F1 %.4f",
         monitor, best, metrics["accuracy"], metrics["balanced_accuracy"], metrics["macro_f1"],

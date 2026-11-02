@@ -42,9 +42,18 @@ composed config without running. Arguments after the script are Hydra overrides 
 no `--flags`).
 
 Each run trains, keeps the best epoch by `train.monitor`, evaluates it once on the test
-partition and writes `config.yaml`, `history.csv`, `best.pt`, `test_metrics.json` and
-`test_predictions.csv` to `outputs/runs/<run_name>/`. Re-evaluate with
-`uv run python -m src.evaluate outputs/runs/<run_name>`.
+partition and writes `config.yaml`, `history.csv`, `best.pt`, `test_metrics.json`,
+`test_predictions.csv`, `curves.png` and `confusion_matrix.png` to `outputs/runs/<run_name>/`.
+
+Overfitting check: `history.csv` and `curves.png` hold loss, accuracy, balanced accuracy and
+macro-F1 for both the training set (scored in eval mode, dropout off) and the validation set,
+per epoch. Overfitting shows as validation loss turning upward while training loss keeps
+falling, or a widening gap between the dashed (train) and solid (validation) lines. The
+validation set is small (354 images, 6 MEL), so single-epoch dips are noise. The training-set
+pass costs one extra forward pass per epoch; turn it off with `train.track_train_metrics=false`
+(the train columns are then omitted). Re-evaluate with
+`uv run python -m src.evaluate outputs/runs/<run_name>`; redraw the plots with
+`uv run python -m src.visualize outputs/runs/<run_name>`.
 
 ## How it works
 
@@ -156,7 +165,7 @@ Cluster: `docs/cluster_guide.md` and `scripts/slurm/` (not yet wired to these co
 ```
 configs/          one folder per swappable part: data, split, model/{image_encoder,
                   tabular_encoder,fusion}, train, uq, ensemble, experiment
-src/              data/, models/, uq/, train.py, evaluate.py, metrics.py
+src/              data/, models/, uq/, train.py, evaluate.py, metrics.py, visualize.py
 scripts/local/    run.sh, smoke.sh
 scripts/slurm/    smoke_test, train, ensemble_array
 data/splits/      committed fold assignment

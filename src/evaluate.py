@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
+from torch import nn
 from torch.utils.data import DataLoader
 
 from src import CLASSES
@@ -34,18 +36,33 @@ def resolve_device(name: str) -> torch.device:
     return torch.device("cpu")
 
 
+@dataclass
+class Predictions:
+    probs: np.ndarray  # (N, K)
+    labels: np.ndarray  # (N,)
+    loss: float | None  # mean `criterion` over the loader, None without a criterion
+
+
 @torch.no_grad()
 def predict(
-    model: MultimodalClassifier, loader: DataLoader, device: torch.device
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return (probabilities (N, K), labels (N,)). Does not change the train/eval mode."""
+    model: MultimodalClassifier,
+    loader: DataLoader,
+    device: torch.device,
+    criterion: nn.Module | None = None,
+) -> Predictions:
+    """Probabilities, labels and optionally the loss. Does not change the train/eval mode."""
     probs, labels = [], []
+    loss_sum = 0.0
     for batch in loader:
         meta = batch["meta"].to(device) if model.uses_metadata else None
-        logits = model(batch["image"].to(device), meta)
-        probs.append(torch.softmax(logits.float(), dim=1).cpu().numpy())
+        logits = model(batch["image"].to(device), meta).float()
+        if criterion is not None:
+            loss_sum += criterion(logits, batch["label"].to(device)).item() * len(batch["label"])
+        probs.append(torch.softmax(logits, dim=1).cpu().numpy())
         labels.append(batch["label"].numpy())
-    return np.concatenate(probs), np.concatenate(labels)
+    labels = np.concatenate(labels)
+    loss = loss_sum / len(labels) if criterion is not None else None
+    return Predictions(np.concatenate(probs), labels, loss)
 
 
 def evaluate_run(run_dir: Path, device: torch.device) -> dict:
@@ -59,7 +76,8 @@ def evaluate_run(run_dir: Path, device: torch.device) -> dict:
     loader = DataLoader(
         data.test, batch_size=cfg.train.batch_size, num_workers=cfg.data.num_workers
     )
-    probs, labels = predict(model, loader, device)
+    prediction = predict(model, loader, device)
+    probs, labels = prediction.probs, prediction.labels
     preds = probs.argmax(axis=1)
     test_df = data.test.df
     metrics = {

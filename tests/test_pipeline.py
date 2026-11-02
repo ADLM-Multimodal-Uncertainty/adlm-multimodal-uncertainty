@@ -39,7 +39,12 @@ def test_experiment_trains_and_evaluates(experiment, synthetic_root, tmp_path):
     cfg = OmegaConf.load(run_dir / "config.yaml")
     assert (cfg.model.get("tabular_encoder") is None) == (experiment == "draft_image_only")
     assert (run_dir / "best.pt").exists()
-    assert len(pd.read_csv(run_dir / "history.csv")) == epochs
+    assert (run_dir / "curves.png").stat().st_size > 0
+    assert (run_dir / "confusion_matrix.png").stat().st_size > 0
+    history = pd.read_csv(run_dir / "history.csv")
+    assert len(history) == epochs
+    for column in ("train_loss", "val_loss", "train_macro_f1", "val_macro_f1"):
+        assert history[column].notna().all(), column
 
     metrics = json.loads((run_dir / "test_metrics.json").read_text())
     predictions = pd.read_csv(run_dir / "test_predictions.csv")

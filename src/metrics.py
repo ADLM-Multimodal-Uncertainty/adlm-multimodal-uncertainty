@@ -13,8 +13,11 @@ from sklearn.metrics import (
     f1_score,
 )
 
+METRIC_NAMES = ("accuracy", "balanced_accuracy", "macro_f1")
+
 
 def summary_metrics(labels: np.ndarray, preds: np.ndarray, n_classes: int) -> dict[str, float]:
+    """The metrics in `METRIC_NAMES`."""
     return {
         "accuracy": float(accuracy_score(labels, preds)),
         "balanced_accuracy": float(balanced_accuracy_score(labels, preds)),
