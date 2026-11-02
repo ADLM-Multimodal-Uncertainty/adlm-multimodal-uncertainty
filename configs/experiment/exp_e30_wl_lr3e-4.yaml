@@ -1,0 +1,15 @@
+# @package _global_
+# Phase 1: exp_e30_wl with learning rate 3e-4.
+defaults:
+  - override /split: patient_holdout
+  - override /model/image_encoder: resnet18
+  - override /model/tabular_encoder: mlp
+  - override /model/fusion: concat
+  - override /train: draft
+
+name: exp_e30_wl_lr3e-4
+train:
+  epochs: 30
+  weighted_loss: true
+  optimizer:
+    lr: 3.0e-4
