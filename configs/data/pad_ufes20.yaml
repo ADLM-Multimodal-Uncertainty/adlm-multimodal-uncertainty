@@ -1,0 +1,29 @@
+root: data/pad_ufes_20
+metadata_csv: ${data.root}/metadata.csv
+image_dir: ${data.root}/images     # searched recursively (flat or imgs_part_*/)
+
+image_size: 224
+subset: null            # int: keep only the first N rows of each partition (smoke runs)
+num_workers: 0
+
+# biopsed (how the label was verified) and the ID columns would leak the label; never list them.
+numeric_features: [age, diameter_1, diameter_2]
+categorical_features:
+  - smoke
+  - drink
+  - background_father
+  - background_mother
+  - pesticide
+  - gender
+  - skin_cancer_history
+  - cancer_history
+  - has_piped_water
+  - has_sewage_system
+  - fitspatrick
+  - region
+  - itch
+  - grew
+  - hurt
+  - changed
+  - bleed
+  - elevation

@@ -1,0 +1,27 @@
+defaults:
+  - data: pad_ufes20
+  - split: patient_holdout
+  - model: multimodal
+  - train: draft
+  - _self_
+  - optional experiment: null
+
+seed: 42
+fold: 0                 # used by k-fold splits only
+device: auto            # auto (cuda > mps > cpu) | cpu | cuda | mps
+
+# Experiment files set a readable name. When overriding a single field, also pass name=...,
+# otherwise the run directory is shared with the unmodified configuration.
+name: ${hydra:runtime.choices.model/image_encoder}-${hydra:runtime.choices.model/tabular_encoder}-${hydra:runtime.choices.model/fusion}
+output_root: outputs
+run_name: ${name}-${hydra:runtime.choices.split}-f${fold}-s${seed}
+run_dir: ${output_root}/runs/${run_name}
+
+hydra:
+  run:
+    dir: ${run_dir}
+  sweep:
+    dir: ${output_root}/runs
+    subdir: ${run_name}
+  job:
+    chdir: false

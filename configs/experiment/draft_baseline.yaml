@@ -1,0 +1,10 @@
+# @package _global_
+# transformer-draft `--mode multimodal`: frozen ResNet18 + metadata MLP, concatenation fusion.
+defaults:
+  - override /split: patient_holdout
+  - override /model/image_encoder: resnet18
+  - override /model/tabular_encoder: mlp
+  - override /model/fusion: concat
+  - override /train: draft
+
+name: draft_baseline

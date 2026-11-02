@@ -1,0 +1,10 @@
+# @package _global_
+# transformer-draft `--mode image`: the same model without the metadata branch.
+defaults:
+  - override /split: patient_holdout
+  - override /model/image_encoder: resnet18
+  - override /model/tabular_encoder: null
+  - override /model/fusion: concat
+  - override /train: draft
+
+name: draft_image_only

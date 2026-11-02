@@ -1,0 +1,3 @@
+_target_: src.models.tabular_encoder.MLPTabularEncoder
+hidden_dims: [64]
+dropout: 0.2

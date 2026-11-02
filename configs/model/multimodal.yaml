@@ -1,0 +1,7 @@
+# Image encoder + optional tabular encoder + fusion head, assembled by src.models.build_model.
+# Drop the metadata branch with '~model/tabular_encoder' on the CLI.
+defaults:
+  - image_encoder: resnet18
+  - tabular_encoder: mlp
+  - fusion: concat
+  - _self_

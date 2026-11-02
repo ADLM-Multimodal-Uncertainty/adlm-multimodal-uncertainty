@@ -1,0 +1,4 @@
+# Concatenate image and metadata features, then an MLP classifier.
+_target_: src.models.fusion.ConcatFusion
+hidden: 128
+dropout: 0.3

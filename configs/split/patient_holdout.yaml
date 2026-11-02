@@ -1,0 +1,6 @@
+# ~70/15/15 by patient, retried until every class is in every partition. Ignores `fold`.
+_target_: src.data.splits.PatientHoldoutSplit
+val_size: 0.15
+test_size: 0.15
+seed: 42
+attempts: 100
