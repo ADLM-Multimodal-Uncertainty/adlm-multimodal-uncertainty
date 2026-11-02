@@ -4,7 +4,7 @@ ADLM practical, WiSe 2026/27, TUM AIM. Team: Larissa Manalil, Yannic Neu, Emre K
 Supervisor: Raphael. Does clinical metadata reduce an image classifier's epistemic uncertainty?
 Per test image, dEU = EU(image) - EU(image + metadata), on PAD-UFES-20.
 
-This repo only runs the GPU experiments. Data analysis lives in
+This repo only runs the experiments. Data analysis lives in  
 [eda](https://github.com/ADLM-Multimodal-Uncertainty/eda); slides, report and figures in
 [reports-and-presentations](https://github.com/ADLM-Multimodal-Uncertainty/reports-and-presentations).
 
@@ -166,9 +166,9 @@ docs/             cluster guide
 
 ## Conventions
 
-- Splits are grouped by `patient_id`; `lesion_id` is only unique within a patient.
-- The 804 images with the clinical block missing are all non-biopsied ACK/SEK/NEV; report
-  results with and without missingness indicators and on complete rows only.
+- Splits are grouped by `patient_id`; `lesion_id` is only unique within a patient. (Review Required)
+- The 804 images with the clinical block missing are all non-biopsied ACK/SEK/NEV; report  
+results with and without missingness indicators and on complete rows only. (Decide how to appraoch this after EDA)
 - Commit before every run (hash into W&B and Notion). Data, outputs and checkpoints live on
-  `/vol/miltank`, never in the repo.
+`/vol/miltank`, never in the repo. (Only for SLURM jobs)
 - One branch per feature, PR + one review into `main`, CI green.
