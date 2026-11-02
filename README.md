@@ -158,6 +158,8 @@ train:
     lr: 1.0e-4
 ```
 
+Open design questions, their options and implementation status: `docs/design_decisions.md`.
+
 Cluster: `docs/cluster_guide.md` and `scripts/slurm/` (not yet wired to these configs).
 
 ## Layout
