@@ -4,7 +4,7 @@ defaults:
   - model: multimodal
   - train: draft
   - _self_
-  - optional experiment: null
+  - experiment: null    # not `optional`: a misspelled experiment name must fail, not run defaults
 
 seed: 42
 fold: 0                 # used by k-fold splits only

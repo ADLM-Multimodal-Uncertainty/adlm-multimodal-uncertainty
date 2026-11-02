@@ -75,3 +75,8 @@ def test_frozen_backbone_has_no_trainable_parameters_and_stays_in_eval_mode():
     assert not any(p.requires_grad for p in model.image_encoder.backbone.parameters())
     assert not model.image_encoder.backbone.training
     assert model.image_encoder.projection.training
+
+
+def test_unknown_experiment_fails_instead_of_running_the_defaults():
+    with pytest.raises(Exception, match="experiment/does_not_exist"):
+        _compose(["experiment=does_not_exist"])
