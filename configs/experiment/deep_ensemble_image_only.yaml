@@ -1,0 +1,6 @@
+# @package _global_
+defaults:
+  - override /ensemble: deep
+  - override /model/tabular_encoder: null
+
+name: deep_ensemble_image_only

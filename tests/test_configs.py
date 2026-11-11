@@ -21,6 +21,7 @@ GROUPS = [
     "model/tabular_encoder",
     "model/fusion",
     "train",
+    "ensemble",
     "experiment",
 ]
 OVERRIDES = [f"{g}={p.stem}" for g in GROUPS for p in sorted((CONFIGS / g).glob("*.yaml"))]

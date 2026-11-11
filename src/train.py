@@ -73,8 +73,7 @@ def train_epoch(
     return total / n
 
 
-@hydra.main(config_path="../configs", config_name="config", version_base="1.3")
-def main(cfg: DictConfig) -> None:
+def train_run(cfg: DictConfig) -> None:
     seed_everything(cfg.seed)
     device = resolve_device(cfg.device)
     run_dir = Path(cfg.run_dir)
@@ -138,6 +137,27 @@ def main(cfg: DictConfig) -> None:
         "best %s %.4f; test accuracy %.4f, balanced accuracy %.4f, macro-F1 %.4f",
         monitor, best, metrics["accuracy"], metrics["balanced_accuracy"], metrics["macro_f1"],
     )
+
+
+@hydra.main(config_path="../configs", config_name="config", version_base="1.3")
+def main(cfg: DictConfig) -> None:
+    if cfg.get("ensemble") is None:
+        train_run(cfg)
+        return
+    ensemble = instantiate(cfg.ensemble)
+    run_dir = Path(cfg.run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    OmegaConf.save(cfg, run_dir / "config.yaml", resolve=True)
+    for seed in ensemble.seeds:
+        member = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
+        member.ensemble = None
+        member.seed = seed
+        member.run_name = f"{cfg.run_name}/members/seed_{seed}"
+        member.run_dir = str(run_dir / "members" / f"seed_{seed}")
+        train_run(member)
+    from src.uq.deep_ensemble import evaluate_ensemble
+
+    evaluate_ensemble(run_dir, resolve_device(cfg.device))
 
 
 if __name__ == "__main__":

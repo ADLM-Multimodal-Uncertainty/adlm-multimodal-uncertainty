@@ -1,7 +1,26 @@
 # Design decisions
 
 Open design questions for the experiments in this repo, the options for each, and where the
-code stands. Last updated: 2 Nov 2026.
+code stands. Last updated: 11 Nov 2026.
+
+## Required architecture: Hydra configuration
+
+Hydra is a design requirement for this project. All experiment choices and tunable
+parameters must flow through the composed configuration in `configs/`; reusable pipeline
+code consumes that configuration. This keeps comparisons reproducible and lets contributors
+and coding agents add experiments without copying training scripts.
+
+- Add reusable components through the existing config groups and `_target_` instantiation
+  contracts. Add named experiment presets under `configs/experiment/`.
+- Expose new tunable parameters in YAML and use Hydra `key=value` overrides and multiruns.
+  Do not introduce a parallel argument parser, hard-coded experiment settings, or separate
+  training loops for individual experiments.
+- Preserve the resolved `config.yaml` saved with each run and configuration-based evaluation.
+  Give changed configurations distinct run names to avoid overwriting results.
+- Coding agents must follow these conventions, check configuration composition and relevant
+  tests when changing configurable components, and document new options and run commands.
+
+Repository instructions for coding agents: [`../AGENTS.md`](../AGENTS.md).
 
 Status labels:
 
@@ -331,10 +350,12 @@ backbone; projection and heads are trained independently.
 
 ## I. Uncertainty quantification (project core)
 
-Nothing in this section is started: `configs/ensemble/` and `configs/uq/` are empty.
+Deep ensembles are available through `ensemble=deep` and the `deep_ensemble` /
+`deep_ensemble_image_only` experiment presets. Member and aggregate outputs are saved by the
+common pipeline; see the README for their formats. Other estimators remain open.
 
 ### I1. Epistemic uncertainty estimator
-- Deep ensemble over seeds: **Not implemented**
+- Deep ensemble over seeds: **Available**
 - MC dropout (which dropout layers, number of passes): **Not implemented**
 - Last-layer Laplace approximation (laplace-torch is already a dependency): **Not implemented**
 - Ensemble of heads only on the shared frozen backbone (cheap, but less diverse, likely
@@ -342,13 +363,13 @@ Nothing in this section is started: `configs/ensemble/` and `configs/uq/` are em
 - SWAG: **Not implemented**
 
 ### I2. Ensemble diversity and size
-- Seeds only: **Not implemented**
+- Seeds only (`ensemble.seeds`): **Available**
 - Seeds plus bootstrap resampling of the training data: **Not implemented**
 - Different architectures per member: **Not implemented**
-- Size: 5 or 10 members: **Not decided**
+- Size: configurable via `ensemble.seeds`, default 5: **Available**
 
 ### I3. Uncertainty decomposition
-- Entropy-based: total = aleatoric + epistemic (mutual information): **Not implemented**
+- Entropy-based: total = aleatoric + epistemic (mutual information), in nats: **Available**
 - Variance-based decomposition: **Not implemented**
 
 ### I4. With vs without metadata (how dEU is measured)
