@@ -68,20 +68,45 @@ class PatientKFoldSplit:
     Test is `fold`, validation is (fold + 1) % n_folds, training is the rest.
     """
 
-    def __init__(self, csv: str | Path) -> None:
+    def __init__(self, csv: str | Path, n_folds: int = 5) -> None:
+        if n_folds < 3:
+            raise ValueError("n_folds must be at least 3 for train/val/test partitions")
         self.csv = Path(csv)
+        self.n_folds = n_folds
 
     def partition(self, df: pd.DataFrame, fold: int) -> dict[str, pd.DataFrame]:
-        assignment = pd.read_csv(self.csv, usecols=["img_id", "fold"], dtype={"img_id": str})
-        merged = df.merge(assignment, on="img_id", how="left", validate="one_to_one")
+        if not 0 <= fold < self.n_folds:
+            raise ValueError(f"fold must be in [0, {self.n_folds - 1}], got {fold}")
+        assignment = pd.read_csv(
+            self.csv, usecols=["img_id", "patient_id", "fold"],
+            dtype={"img_id": str, "patient_id": str},
+        )
+        if assignment.isna().any().any():
+            raise ValueError("fold assignment contains missing values")
+        if assignment["img_id"].duplicated().any():
+            raise ValueError("fold assignment contains duplicate img_id rows")
+        if not assignment["fold"].isin(range(self.n_folds)).all():
+            raise ValueError("fold assignment must contain integer fold IDs in range")
+        if set(assignment["fold"]) != set(range(self.n_folds)):
+            raise ValueError("fold assignment must contain every configured fold")
+        if (assignment.groupby("patient_id")["fold"].nunique() > 1).any():
+            raise ValueError("fold assignment places a patient in multiple folds")
+        merged = df.merge(
+            assignment, on="img_id", how="left", validate="one_to_one",
+            suffixes=("", "_assigned"),
+        )
         if merged["fold"].isna().any():
             raise ValueError(f"{int(merged['fold'].isna().sum())} rows missing from {self.csv}")
-        n_folds = int(merged["fold"].max()) + 1
-        val_fold = (fold + 1) % n_folds
+        if not merged["patient_id"].eq(merged["patient_id_assigned"]).all():
+            raise ValueError("patient_id in metadata disagrees with fold assignment")
+        merged = merged.drop(columns="patient_id_assigned")
+        val_fold = (fold + 1) % self.n_folds
         parts = {
             "train": merged[~merged["fold"].isin([fold, val_fold])],
             "val": merged[merged["fold"] == val_fold],
             "test": merged[merged["fold"] == fold],
         }
+        if any(part.empty for part in parts.values()):
+            raise ValueError("metadata must contain patients in train, val and test partitions")
         check_patient_disjoint(parts)
         return parts

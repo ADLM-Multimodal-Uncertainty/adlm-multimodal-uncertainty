@@ -1,3 +1,4 @@
 # Committed patient-grouped 5-fold assignment: test = fold, val = (fold + 1) % n_folds.
 _target_: src.data.splits.PatientKFoldSplit
 csv: data/splits/pad_ufes20_5fold_patient.csv
+n_folds: 5

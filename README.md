@@ -55,6 +55,67 @@ pass costs one extra forward pass per epoch; turn it off with `train.track_train
 `uv run python -m src.evaluate outputs/runs/<run_name>`; redraw the plots with
 `uv run python -m src.visualize outputs/runs/<run_name>`.
 
+## Five-fold patient cross-validation
+
+Run the paired experiments on the same committed patient assignment:
+
+```bash
+scripts/local/run.sh -m experiment=patient_5fold_multimodal
+scripts/local/run.sh -m experiment=patient_5fold_image_only
+```
+
+Each preset sets the Hydra fold sweep to `range(0,${split.n_folds})`; `-m` launches all five
+runs. Without `-m`, it trains only `fold=0` (or the selected `fold`). To run a specific fold:
+
+```bash
+scripts/local/run.sh experiment=patient_5fold_multimodal fold=2
+```
+
+Test is fold `k`, validation is `(k + 1) % 5`, and training uses the other three folds:
+roughly **60/20/20**, with sizes varying by images per patient. Each patient is tested once
+across the five runs. This preserves the repository's rotating validation protocol, rather
+than training on all four non-test folds. Validation selects the checkpoint; metadata
+preprocessing fits only training rows. The CSV is shared by both modalities, independent of
+training seed. Assignments are validated for patient consistency, complete fold IDs and
+coverage of the supplied metadata before training.
+
+Each fold writes its own resolved configuration, checkpoint and test metrics under
+`outputs/runs/patient_5fold_<mode>-patient_kfold-f<fold>-s<seed>/`. These are cross-validation
+models, not deep ensemble members; compare their per-fold scores and report mean and spread.
+Automatic score aggregation is not implemented. `-m seed=0,1,2` also repeats every fold for
+three training seeds. Set `name=...` when changing other settings to keep outputs distinct.
+The draft holdout experiments remain available unchanged.
+
+## Deep ensembles
+
+Train independent members on the same patient split through the common pipeline:
+
+```bash
+scripts/local/run.sh experiment=deep_ensemble
+scripts/local/run.sh experiment=deep_ensemble_image_only
+scripts/local/run.sh experiment=deep_ensemble ensemble.seeds=[0,1,2] name=ensemble_three
+uv run python -m src.evaluate outputs/runs/deep_ensemble-patient_holdout-f0-s42
+```
+
+`ensemble=deep` can also be combined with other experiments; give the combination a distinct
+`name`. `ensemble.seeds` sets the member training seeds (at least two distinct integers).
+The top-level `seed` remains part of the run name; split membership comes from the saved
+`split` configuration and `fold`, shared by all members. Five seeds are the default.
+Members train sequentially and select their own best validation checkpoint. This is an
+ensemble of independently trained models, without bootstrap resampling.
+
+The ensemble directory contains the resolved `config.yaml`, `members/seed_<seed>/` with
+all ordinary training artifacts, `test_metrics.json` for the averaged probabilities, and
+`test_predictions.csv` with mean class probabilities and three uncertainty columns:
+`total_uncertainty` (entropy of the mean), `aleatoric_uncertainty` (mean member entropy),
+and `epistemic_uncertainty` (their difference / mutual information). Entropies use natural
+logarithms (nats). `test_member_predictions.npz` stores `probabilities` with shape
+(member, image, class), plus `seeds`, `img_ids`, `patient_ids`, `labels` (class indices), and
+`classes`, so outputs can be joined by image ID for later image-only/multimodal comparisons.
+Load it with `numpy.load(path, allow_pickle=False)`. Re-evaluation uses each member's saved
+config and checkpoint and regenerates the aggregate artifacts; it requires the original data.
+Training curves and confusion matrix plots remain in each member directory.
+
 ## How it works
 
 A run is one choice per config group. Hydra composes them, each `_target_` names the class to

@@ -22,7 +22,10 @@ Current: one patient-grouped holdout, ~70/15/15, seed 42, retried until every cl
 partition. Not stratified: test holds only 5 MEL images.
 - Patient holdout 70/15/15 (`split=patient_holdout`): **Current**
 - Patient-grouped 5-fold from the committed CSV, test = `fold`, val = `fold + 1`
-  (`split=patient_kfold fold=0..4`): **Available**
+  (`split=patient_kfold fold=0..4`): **Available**. Paired presets
+  `patient_5fold_multimodal` / `patient_5fold_image_only` run all folds with Hydra `-m`.
+  Three training folds, one validation fold and one test fold give approximately 60/20/20;
+  assignments are validated before use.
 - Repeated holdout over several split seeds (`split.seed=...`): **Available**
 - Class-stratified patient-grouped split (holdout or new folds): **Not implemented**
 - Nested cross-validation (inner folds for model selection): **Not implemented**

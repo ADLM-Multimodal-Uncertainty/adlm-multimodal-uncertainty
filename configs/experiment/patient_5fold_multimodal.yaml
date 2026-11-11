@@ -1,0 +1,11 @@
+# @package _global_
+# Use -m to train all five folds through the common training pipeline.
+defaults:
+  - draft_baseline
+  - override /split: patient_kfold
+
+name: patient_5fold_multimodal
+hydra:
+  sweeper:
+    params:
+      fold: range(0,${split.n_folds})
