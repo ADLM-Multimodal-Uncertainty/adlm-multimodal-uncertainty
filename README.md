@@ -86,6 +86,22 @@ Automatic score aggregation is not implemented. `-m seed=0,1,2` also repeats eve
 three training seeds. Set `name=...` when changing other settings to keep outputs distinct.
 The draft holdout experiments remain available unchanged.
 
+The fold count is configurable. For example, run two folds with either preset:
+
+```bash
+scripts/local/run.sh -m experiment=patient_5fold_multimodal split.n_folds=2 name=patient_2fold_multimodal
+scripts/local/run.sh -m experiment=patient_5fold_image_only split.n_folds=2 name=patient_2fold_image_only
+```
+
+The preset names retain `5fold` for compatibility; the sweep follows `split.n_folds`.
+With `split.csv=null` (default), five folds reuse the committed assignment and other
+counts generate deterministic patient-grouped folds from metadata. An explicit
+`split.csv=...` must match the configured fold count. Generated folds are grouped,
+not class-stratified. For two folds, half the patients are tested and the other half
+are split into training/validation with `split.val_size=0.2` and `split.seed=42`
+(approximately 40/10/50 overall). Three or more folds retain rotating validation.
+Use the same metadata and split settings for paired modality comparisons.
+
 ## Deep ensembles
 
 Train independent members on the same patient split through the common pipeline:

@@ -30,6 +30,11 @@ partition. Not stratified: test holds only 5 MEL images.
 - Class-stratified patient-grouped split (holdout or new folds): **Not implemented**
 - Nested cross-validation (inner folds for model selection): **Not implemented**
 
+Fold count is configurable via `split.n_folds` (minimum 2). Five folds retain the
+committed CSV by default; other counts generate deterministic patient-grouped folds.
+Two folds use an inner patient holdout for validation (`split.val_size`, `split.seed`);
+three or more retain rotating validation. Generated folds are not stratified.
+
 ### A2. Unit of analysis
 Current: every image is one sample; metrics are per image.
 - Image level: **Current**

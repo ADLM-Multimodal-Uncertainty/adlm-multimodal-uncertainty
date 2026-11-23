@@ -55,7 +55,8 @@ def test_experiment_trains_and_evaluates(experiment, synthetic_root, tmp_path):
 
 
 @pytest.mark.parametrize("mode", ["multimodal", "image_only"])
-def test_five_fold_multirun(mode, synthetic_root, tmp_path):
+@pytest.mark.parametrize("n_folds", [2, 5])
+def test_five_fold_multirun(mode, n_folds, synthetic_root, tmp_path):
     df = pd.read_csv(synthetic_root / "metadata.csv")
     # Patient suffix indexes are balanced within each synthetic diagnosis.
     assignment = df[["img_id", "patient_id"]].copy()
@@ -66,7 +67,8 @@ def test_five_fold_multirun(mode, synthetic_root, tmp_path):
     result = subprocess.run(
         [
             sys.executable, "-m", "src.train", "-m",
-            f"experiment={experiment}", f"split.csv={csv_path}",
+            f"experiment={experiment}",
+            *([f"split.csv={csv_path}"] if n_folds == 5 else ["split.n_folds=2"]),
             f"data.root={synthetic_root}", f"output_root={tmp_path / 'outputs'}",
             "data.image_size=32", "data.subset=6", "train.epochs=1",
             "train.batch_size=6", "model.image_encoder.pretrained=false",
@@ -76,11 +78,11 @@ def test_five_fold_multirun(mode, synthetic_root, tmp_path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     tested = []
-    for fold in range(5):
+    for fold in range(n_folds):
         run_dir = tmp_path / "outputs" / "runs" / f"{experiment}-patient_kfold-f{fold}-s42"
         cfg = OmegaConf.load(run_dir / "config.yaml")
         assert cfg.fold == fold
-        assert cfg.split.n_folds == 5
+        assert cfg.split.n_folds == n_folds
         assert (cfg.model.get("tabular_encoder") is None) == (mode == "image_only")
         assert (run_dir / "best.pt").exists()
         predictions = pd.read_csv(run_dir / "test_predictions.csv")

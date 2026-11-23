@@ -101,9 +101,28 @@ def test_kfold_rejects_invalid_assignments(tmp_path, case, message):
         PatientKFoldSplit(path).partition(df, 0)
 
 
-def test_kfold_requires_at_least_three_folds():
-    with pytest.raises(ValueError, match="at least 3"):
-        PatientKFoldSplit(KFOLD_CSV, n_folds=2)
+@pytest.mark.parametrize("n_folds", [0, 1, 2.5, True])
+def test_kfold_requires_at_least_two_integer_folds(n_folds):
+    with pytest.raises(ValueError, match="at least 2"):
+        PatientKFoldSplit(n_folds=n_folds)
+
+
+@pytest.mark.parametrize("n_folds", [2, 3, 4])
+def test_generated_folds(n_folds):
+    df = synthetic_metadata()
+    splitter = PatientKFoldSplit(n_folds=n_folds)
+    tested = []
+    for fold in range(n_folds):
+        parts = splitter.partition(df, fold)
+        repeated = splitter.partition(df.sample(frac=1, random_state=8), fold)
+        _assert_valid(parts, df)
+        for name, part in parts.items():
+            assert not part.empty
+            assert set(part.img_id) == set(repeated[name].img_id)
+        tested.append(parts["test"])
+    combined = pd.concat(tested)
+    assert len(combined) == len(df)
+    assert not combined.img_id.duplicated().any()
 
 
 def test_kfold_rejects_metadata_without_all_partitions():
@@ -111,3 +130,23 @@ def test_kfold_rejects_metadata_without_all_partitions():
     df = df[df["fold"] == 0].drop(columns="fold")
     with pytest.raises(ValueError, match="train, val and test"):
         PatientKFoldSplit(KFOLD_CSV).partition(df, 0)
+
+
+def test_default_five_fold_assignment_is_preserved():
+    df = pd.read_csv(KFOLD_CSV, dtype={"img_id": str}).drop(columns="fold")
+    default = PatientKFoldSplit().partition(df, 0)
+    explicit = PatientKFoldSplit(KFOLD_CSV).partition(df, 0)
+    assert all(default[k].equals(explicit[k]) for k in default)
+
+
+def test_two_fold_csv_uses_inner_patient_validation(tmp_path):
+    df = synthetic_metadata()
+    assignment = df[["img_id", "patient_id"]].copy()
+    assignment["fold"] = assignment["patient_id"].str[-2:].astype(int) % 2
+    path = tmp_path / "two_folds.csv"
+    assignment.to_csv(path, index=False)
+    parts = PatientKFoldSplit(path, n_folds=2).partition(df, 0)
+    _assert_valid(parts, df)
+    assert all(not p.empty for p in parts.values())
+    assert set(parts["test"]["fold"]) == {0}
+    assert set(parts["train"]["fold"]) == set(parts["val"]["fold"]) == {1}

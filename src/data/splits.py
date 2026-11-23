@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Protocol
 
 import pandas as pd
-from sklearn.model_selection import GroupShuffleSplit
+from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 
 
 class Split(Protocol):
@@ -65,18 +65,38 @@ class PatientHoldoutSplit:
 class PatientKFoldSplit:
     """Fold assignment read from a CSV (img_id, patient_id, fold).
 
-    Test is `fold`, validation is (fold + 1) % n_folds, training is the rest.
+    Without a CSV, reuse the committed assignment for five folds, otherwise
+    generate deterministic patient-grouped folds. Test is `fold`, validation is
+    (fold + 1) % n_folds, training is the rest. For two folds, reserve val_size
+    of the non-test patients for validation instead.
     """
 
-    def __init__(self, csv: str | Path, n_folds: int = 5) -> None:
-        if n_folds < 3:
-            raise ValueError("n_folds must be at least 3 for train/val/test partitions")
-        self.csv = Path(csv)
+    def __init__(
+        self, csv: str | Path | None = None, n_folds: int = 5,
+        seed: int = 42, val_size: float = 0.2,
+    ) -> None:
+        if not isinstance(n_folds, int) or isinstance(n_folds, bool) or n_folds < 2:
+            raise ValueError("n_folds must be an integer of at least 2")
+        if not 0 < val_size < 1:
+            raise ValueError("val_size must be between 0 and 1")
+        self.csv = Path(csv) if csv is not None else (
+            Path(__file__).resolve().parents[2] / "data/splits/pad_ufes20_5fold_patient.csv"
+            if n_folds == 5 else None
+        )
         self.n_folds = n_folds
+        self.seed = seed
+        self.val_size = val_size
 
     def partition(self, df: pd.DataFrame, fold: int) -> dict[str, pd.DataFrame]:
         if not 0 <= fold < self.n_folds:
             raise ValueError(f"fold must be in [0, {self.n_folds - 1}], got {fold}")
+        if self.csv is None:
+            merged = df.copy()
+            merged["fold"] = -1
+            splitter = GroupKFold(n_splits=self.n_folds)
+            for index, (_, test) in enumerate(splitter.split(df, groups=df["patient_id"])):
+                merged.iloc[test, merged.columns.get_loc("fold")] = index
+            return self._partition(merged, fold)
         assignment = pd.read_csv(
             self.csv, usecols=["img_id", "patient_id", "fold"],
             dtype={"img_id": str, "patient_id": str},
@@ -100,12 +120,23 @@ class PatientKFoldSplit:
         if not merged["patient_id"].eq(merged["patient_id_assigned"]).all():
             raise ValueError("patient_id in metadata disagrees with fold assignment")
         merged = merged.drop(columns="patient_id_assigned")
+        return self._partition(merged, fold)
+
+    def _partition(self, merged: pd.DataFrame, fold: int) -> dict[str, pd.DataFrame]:
         val_fold = (fold + 1) % self.n_folds
         parts = {
             "train": merged[~merged["fold"].isin([fold, val_fold])],
             "val": merged[merged["fold"] == val_fold],
             "test": merged[merged["fold"] == fold],
         }
+        if self.n_folds == 2:
+            remaining = merged[merged["fold"] != fold]
+            inner = GroupShuffleSplit(
+                n_splits=1, test_size=self.val_size, random_state=self.seed
+            )
+            train, val = next(inner.split(remaining, groups=remaining["patient_id"]))
+            parts["train"] = remaining.iloc[train]
+            parts["val"] = remaining.iloc[val]
         if any(part.empty for part in parts.values()):
             raise ValueError("metadata must contain patients in train, val and test partitions")
         check_patient_disjoint(parts)

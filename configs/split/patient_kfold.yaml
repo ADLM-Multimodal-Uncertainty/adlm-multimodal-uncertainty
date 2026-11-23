@@ -1,4 +1,8 @@
-# Committed patient-grouped 5-fold assignment: test = fold, val = (fold + 1) % n_folds.
+# null reuses the committed five-fold CSV; other counts generate grouped folds.
+# An explicit CSV must contain exactly n_folds folds.
 _target_: src.data.splits.PatientKFoldSplit
-csv: data/splits/pad_ufes20_5fold_patient.csv
+csv: null
 n_folds: 5
+# Seed and validation fraction used for the two-fold inner patient holdout.
+seed: 42
+val_size: 0.2
