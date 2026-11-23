@@ -134,6 +134,11 @@ Training curves and confusion matrix plots remain in each member directory.
 
 ## How it works
 
+**Hydra is a required part of the project architecture.** New experiment settings and
+components must use the existing YAML config groups and Hydra composition. Coding agents
+must follow [AGENTS.md](AGENTS.md); the rationale and requirements are recorded in
+[design decisions](docs/design_decisions.md#required-architecture-hydra-configuration).
+
 A run is one choice per config group. Hydra composes them, each `_target_` names the class to
 build, and the pipeline code stays the same for every experiment:
 
@@ -259,4 +264,6 @@ docs/             cluster guide
 results with and without missingness indicators and on complete rows only. (Decide how to appraoch this after EDA)
 - Commit before every run (hash into W&B and Notion). Data, outputs and checkpoints live on
 `/vol/miltank`, never in the repo. (Only for SLURM jobs)
-- One branch per feature, PR + one review into `main`, CI green.
+- Develop every new feature on a dedicated branch; never directly on `main` or `master`.
+  Create and switch to the feature branch before editing. Merge via PR with at least one
+  review and passing CI. Coding agents must follow the same rule (see `AGENTS.md`).

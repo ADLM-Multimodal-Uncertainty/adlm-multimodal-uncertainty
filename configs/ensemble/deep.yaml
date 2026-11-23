@@ -1,0 +1,2 @@
+_target_: src.uq.deep_ensemble.DeepEnsemble
+seeds: [0, 1, 2, 3, 4]

@@ -67,6 +67,10 @@ def predict(
 
 def evaluate_run(run_dir: Path, device: torch.device) -> dict:
     cfg = OmegaConf.load(run_dir / "config.yaml")
+    if cfg.get("ensemble") is not None:
+        from src.uq.deep_ensemble import evaluate_ensemble
+
+        return evaluate_ensemble(run_dir, device)
     data = build_fold(cfg.data, instantiate(cfg.split), cfg.fold)
     model = build_model(cfg.model, len(CLASSES), data.n_meta_features)
     state = torch.load(run_dir / "best.pt", map_location="cpu", weights_only=True)

@@ -3,6 +3,7 @@ defaults:
   - split: patient_holdout
   - model: multimodal
   - train: draft
+  - ensemble: null
   - _self_
   - experiment: null    # not `optional`: a misspelled experiment name must fail, not run defaults
 
