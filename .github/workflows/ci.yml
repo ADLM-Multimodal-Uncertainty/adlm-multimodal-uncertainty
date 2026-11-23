@@ -11,6 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
-      - run: uv sync --extra dev
+      # Hydra 1.3 CLI is incompatible with Python 3.14 argparse.
+      - run: uv sync --python 3.12 --extra dev
       - run: uv run ruff check .
       - run: uv run pytest
