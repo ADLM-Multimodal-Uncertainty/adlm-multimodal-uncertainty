@@ -32,12 +32,12 @@ Only the patient-grouped fold assignment in `data/splits/` is committed.
 scripts/local/smoke.sh experiment=draft_baseline
 scripts/local/run.sh experiment=draft_baseline
 scripts/local/run.sh experiment=draft_image_only
-scripts/local/run.sh experiment=draft_baseline split=patient_kfold fold=2 name=kfold_f2
+scripts/local/run.sh experiment=draft_baseline split=patient_kfold fold=1 name=kfold_f1
 uv run python -m src.train experiment=draft_baseline --cfg job
 ```
 
 In order: a one-minute pipeline check (64 images, one epoch, no weight download); the draft's
-multimodal and image-only modes; the same model on the committed 5-fold split; printing the
+multimodal and image-only modes; the same model on the default 2-fold patient split; printing the
 composed config without running. Arguments after the script are Hydra overrides (`key=value`,
 no `--flags`).
 
@@ -55,20 +55,21 @@ pass costs one extra forward pass per epoch; turn it off with `train.track_train
 `uv run python -m src.evaluate outputs/runs/<run_name>`; redraw the plots with
 `uv run python -m src.visualize outputs/runs/<run_name>`.
 
-## Five-fold patient cross-validation
+## Patient cross-validation
 
-Run the paired experiments on the same committed patient assignment:
+Patient k-fold splitting defaults to **two folds** (`split.n_folds=2`).
+To use the committed five-fold assignment, select five folds explicitly:
 
 ```bash
-scripts/local/run.sh -m experiment=patient_5fold_multimodal
-scripts/local/run.sh -m experiment=patient_5fold_image_only
+scripts/local/run.sh -m experiment=patient_5fold_multimodal split.n_folds=5 name=patient_5fold_multimodal
+scripts/local/run.sh -m experiment=patient_5fold_image_only split.n_folds=5 name=patient_5fold_image_only
 ```
 
-Each preset sets the Hydra fold sweep to `range(0,${split.n_folds})`; `-m` launches all five
-runs. Without `-m`, it trains only `fold=0` (or the selected `fold`). To run a specific fold:
+Each preset sets the Hydra fold sweep to `range(0,${split.n_folds})`; `-m` launches all configured
+folds (five in the examples above). Without `-m`, it trains only `fold=0` (or the selected `fold`). To run a specific fold:
 
 ```bash
-scripts/local/run.sh experiment=patient_5fold_multimodal fold=2
+scripts/local/run.sh experiment=patient_5fold_multimodal split.n_folds=5 fold=2
 ```
 
 Test is fold `k`, validation is `(k + 1) % 5`, and training uses the other three folds:
@@ -131,6 +132,26 @@ logarithms (nats). `test_member_predictions.npz` stores `probabilities` with sha
 Load it with `numpy.load(path, allow_pickle=False)`. Re-evaluation uses each member's saved
 config and checkpoint and regenerates the aggregate artifacts; it requires the original data.
 Training curves and confusion matrix plots remain in each member directory.
+
+## Freeze or fine-tune ResNet18
+
+Toggle `model.image_encoder.freeze` in any experiment. The default is `false`:
+the entire ImageNet-pretrained ResNet18 is fine-tuned on our training patients,
+including BatchNorm statistics. Set it to `true` to train only the projection,
+metadata encoder (when present), and classifier. Keep `pretrained=true` to
+start from ImageNet weights.
+
+```bash
+# Fine-tune the backbone with two patient folds.
+scripts/local/run.sh -m experiment=patient_5fold_multimodal split.n_folds=2 model.image_encoder.freeze=false train.optimizer.lr=1e-4 name=patient_2fold_finetuned
+# Freeze the backbone again.
+scripts/local/run.sh -m experiment=patient_5fold_multimodal split.n_folds=2 model.image_encoder.freeze=true name=patient_2fold_frozen
+```
+
+The same toggle works for image-only and deep ensemble experiments. Set the
+value in `configs/model/image_encoder/resnet18.yaml` to change the default;
+CLI overrides apply only to that invocation. Each run saves the resolved setting
+in its `config.yaml`. Use distinct names for frozen and fine-tuned runs.
 
 ## How it works
 
@@ -217,7 +238,7 @@ defaults:
 name: draft_baseline
 ```
 
-`draft_image_only.yaml` is the same with `override /model/tabular_encoder: null`. Both reproduce
+`draft_image_only.yaml` is the same with `override /model/tabular_encoder: null`. With `model.image_encoder.freeze=true`, both reproduce
 the draft exactly: on the real data the two repos give the same split, the same loss and
 validation macro-F1 at every epoch, and identical test predictions (seed 42).
 

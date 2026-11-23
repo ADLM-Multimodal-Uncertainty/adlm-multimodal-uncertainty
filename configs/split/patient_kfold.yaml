@@ -2,7 +2,7 @@
 # An explicit CSV must contain exactly n_folds folds.
 _target_: src.data.splits.PatientKFoldSplit
 csv: null
-n_folds: 5
+n_folds: 2
 # Seed and validation fraction used for the two-fold inner patient holdout.
 seed: 42
 val_size: 0.2

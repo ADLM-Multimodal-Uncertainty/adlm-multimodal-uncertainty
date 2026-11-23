@@ -68,7 +68,8 @@ def test_five_fold_multirun(mode, n_folds, synthetic_root, tmp_path):
         [
             sys.executable, "-m", "src.train", "-m",
             f"experiment={experiment}",
-            *([f"split.csv={csv_path}"] if n_folds == 5 else ["split.n_folds=2"]),
+            f"split.n_folds={n_folds}",
+            *([f"split.csv={csv_path}"] if n_folds == 5 else []),
             f"data.root={synthetic_root}", f"output_root={tmp_path / 'outputs'}",
             "data.image_size=32", "data.subset=6", "train.epochs=1",
             "train.batch_size=6", "model.image_encoder.pretrained=false",

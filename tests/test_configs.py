@@ -71,7 +71,7 @@ def test_experiment_builds_the_draft_architecture(experiment, head):
 
 
 def test_frozen_backbone_has_no_trainable_parameters_and_stays_in_eval_mode():
-    cfg = _compose(["experiment=draft_baseline"])
+    cfg = _compose(["experiment=draft_baseline", "model.image_encoder.freeze=true"])
     model = build_model(cfg.model, n_classes=6, n_meta_features=20).train()
     assert not any(p.requires_grad for p in model.image_encoder.backbone.parameters())
     assert not model.image_encoder.backbone.training
@@ -81,3 +81,28 @@ def test_frozen_backbone_has_no_trainable_parameters_and_stays_in_eval_mode():
 def test_unknown_experiment_fails_instead_of_running_the_defaults():
     with pytest.raises(Exception, match="experiment/does_not_exist"):
         _compose(["experiment=does_not_exist"])
+
+
+def test_unfreezing_backbone_enables_training_and_updates_weights():
+    cfg = _compose(["experiment=draft_baseline", *OFFLINE])
+    model = build_model(cfg.model, n_classes=6, n_meta_features=20).train()
+    encoder = model.image_encoder
+    assert all(p.requires_grad for p in encoder.backbone.parameters())
+    assert encoder.backbone.training
+    assert encoder.backbone.bn1.training
+    before = encoder.backbone.conv1.weight.detach().clone()
+    optimizer = torch.optim.SGD(
+        [p for p in model.parameters() if p.requires_grad], lr=0.01
+    )
+    loss = model(torch.randn(2, 3, 32, 32), torch.randn(2, 20)).square().mean()
+    loss.backward()
+    assert encoder.backbone.conv1.weight.grad is not None
+    optimizer.step()
+    assert not torch.equal(before, encoder.backbone.conv1.weight)
+
+
+def test_default_patient_folds_and_backbone_training():
+    cfg = _compose(["experiment=patient_5fold_multimodal"])
+    assert cfg.split.n_folds == 2
+    assert cfg.model.image_encoder.freeze is False
+    assert cfg.model.image_encoder.pretrained is True

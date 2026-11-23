@@ -49,7 +49,7 @@ partition. Not stratified: test holds only 5 MEL images.
 - Class-stratified patient-grouped split (holdout or new folds): **Not implemented**
 - Nested cross-validation (inner folds for model selection): **Not implemented**
 
-Fold count is configurable via `split.n_folds` (minimum 2). Five folds retain the
+Fold count is configurable via `split.n_folds` (default 2, minimum 2). Five folds retain the
 committed CSV by default; other counts generate deterministic patient-grouped folds.
 Two folds use an inner patient holdout for validation (`split.val_size`, `split.seed`);
 three or more retain rotating validation. Generated folds are not stratified.
@@ -201,16 +201,16 @@ or a weighted one followed by calibration (A3).
 - Self-supervised or foundation weights: **Not implemented**
 
 ### E3. Fine-tuning
-- Fully frozen backbone (`model.image_encoder.freeze=true`): **Current**
-- Full fine-tuning (`model.image_encoder.freeze=false`, usually with a lower lr): **Available**
+- Fully frozen backbone (`model.image_encoder.freeze=true`): **Available**
+- Full fine-tuning (`model.image_encoder.freeze=false`, usually with a lower lr): **Current**
 - Fine-tune only the last block(s): **Not implemented**
 - Gradual unfreezing: **Not implemented**
 - Layer-wise / discriminative learning rates: **Not implemented**
 - LoRA or adapters: **Not implemented**
 
 ### E4. BatchNorm in the backbone
-- Frozen running statistics (backbone kept in eval mode while frozen): **Current**
-- Train-mode BatchNorm when fine-tuning (statistics updated per batch): **Available** (what
+- Frozen running statistics (backbone kept in eval mode while frozen): **Available**
+- Train-mode BatchNorm when fine-tuning (statistics updated per batch): **Current** (what
   `freeze=false` does)
 - Frozen statistics with trainable affine weights while fine-tuning: **Not implemented**
 - Replace with GroupNorm: **Not implemented**
