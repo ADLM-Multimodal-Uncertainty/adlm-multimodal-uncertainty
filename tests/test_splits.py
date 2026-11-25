@@ -1,7 +1,8 @@
 import pandas as pd
 import pytest
+from omegaconf import OmegaConf
 
-from src.data.dataset import subsample_training_patients
+from src.data.dataset import _resolve_runtime_data_paths, subsample_training_patients
 from src.data.splits import PatientHoldoutSplit, PatientKFoldSplit, check_patient_disjoint
 
 from .conftest import REPO, synthetic_metadata
@@ -173,3 +174,20 @@ def test_training_patient_subsets_are_deterministic_stratified_and_nested():
 def test_training_patient_subset_rejects_unsupported_fraction():
     with pytest.raises(ValueError, match="train_fraction"):
         subsample_training_patients(synthetic_metadata(), 0.3, seed=42)
+
+
+def test_runtime_data_paths_uses_local_mirror_when_valid(tmp_path, monkeypatch):
+    canonical_meta = tmp_path / "nfs" / "metadata.csv"
+    canonical_imgs = tmp_path / "nfs" / "images"
+    cfg = OmegaConf.create({"metadata_csv": str(canonical_meta), "image_dir": str(canonical_imgs)})
+
+    mirror = tmp_path / "local"
+    (mirror / "images").mkdir(parents=True)
+    (mirror / "metadata.csv").write_text("img_id\n")
+
+    monkeypatch.setenv("ADLM_LOCAL_DATA_ROOT", str(mirror))
+    assert _resolve_runtime_data_paths(cfg) == (mirror / "metadata.csv", mirror / "images")
+
+    monkeypatch.setenv("ADLM_LOCAL_DATA_ROOT", str(tmp_path / "missing"))
+    assert _resolve_runtime_data_paths(cfg) == (canonical_meta, canonical_imgs)
+

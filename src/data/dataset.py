@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -132,10 +133,26 @@ def subsample_training_patients(
     return selected
 
 
+def _resolve_runtime_data_paths(cfg: DictConfig) -> tuple[Path, Path]:
+    """Use a node-local mirror (`ADLM_LOCAL_DATA_ROOT`) when staged on cluster scratch,
+    keeping canonical NFS paths in saved Hydra `config.yaml`."""
+    metadata_csv = Path(cfg.metadata_csv)
+    image_dir = Path(cfg.image_dir)
+    local_root = os.environ.get("ADLM_LOCAL_DATA_ROOT")
+    if local_root:
+        local_path = Path(local_root)
+        local_meta = local_path / "metadata.csv"
+        local_images = local_path / "images"
+        if local_meta.is_file() and local_images.is_dir():
+            return local_meta, local_images
+    return metadata_csv, image_dir
+
+
 def build_fold(cfg: DictConfig, split: Split, fold: int) -> FoldData:
     """Partition with `split`, fit the metadata preprocessor on the training rows only, and
     build the three datasets. Deterministic, so evaluation can rebuild it from the config."""
-    parts = split.partition(load_metadata(cfg.metadata_csv), fold)
+    metadata_csv, image_dir = _resolve_runtime_data_paths(cfg)
+    parts = split.partition(load_metadata(metadata_csv), fold)
     if cfg.subset:
         parts = {name: part.head(int(cfg.subset)) for name, part in parts.items()}
     elif not np.isclose(float(cfg.train_fraction), 1.0):
@@ -151,7 +168,7 @@ def build_fold(cfg: DictConfig, split: Split, fold: int) -> FoldData:
         for name, part in parts.items()
     }
 
-    index = build_image_index(cfg.image_dir)
+    index = build_image_index(image_dir)
     datasets = {
         name: SkinLesionDataset(
             parts[name], features[name], index, image_transform(cfg.image_size, name == "train")

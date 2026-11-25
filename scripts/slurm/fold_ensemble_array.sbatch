@@ -59,8 +59,31 @@ RESOLVED_DATA="$(resolve_data_dir)" || {
     exit 1
 }
 
+# Stage dataset once onto node-local NVMe (/tmp) to avoid repeated NFS PNG reads and EIO stalls.
+STAGE_DIR=""
+cleanup_stage() {
+    if [[ -n "$STAGE_DIR" && -d "$STAGE_DIR" ]]; then
+        rm -rf "$STAGE_DIR"
+    fi
+}
+trap cleanup_stage EXIT
+
+if [[ "${STAGE_TO_LOCAL:-1}" == "1" && -w /tmp ]]; then
+    STAGE_DIR="/tmp/adlm_${SLURM_JOB_ID:-$$}_${SLURM_ARRAY_TASK_ID:-0}"
+    mkdir -p "$STAGE_DIR/pad_ufes_20"
+    DATA_TAR="${RESOLVED_DATA}.tar"
+    if [[ -f "$DATA_TAR" ]]; then
+        echo "staging $DATA_TAR -> $STAGE_DIR/pad_ufes_20"
+        tar -xf "$DATA_TAR" -C "$STAGE_DIR/pad_ufes_20"
+    else
+        echo "staging $RESOLVED_DATA -> $STAGE_DIR/pad_ufes_20"
+        cp -a "$RESOLVED_DATA/." "$STAGE_DIR/pad_ufes_20/"
+    fi
+    export ADLM_LOCAL_DATA_ROOT="$STAGE_DIR/pad_ufes_20"
+fi
+
 FOLD="${SLURM_ARRAY_TASK_ID}"
-echo "commit $(git rev-parse --short HEAD) host=$(hostname) fold=${FOLD} data=${RESOLVED_DATA} output_root=${OUTPUT_ROOT}"
+echo "commit $(git rev-parse --short HEAD) host=$(hostname) fold=${FOLD} data=${RESOLVED_DATA} local=${ADLM_LOCAL_DATA_ROOT:-none} output_root=${OUTPUT_ROOT}"
 "$PYTHON" -m src.train \
     fold="${FOLD}" \
     output_root="$OUTPUT_ROOT" \
