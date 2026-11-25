@@ -19,8 +19,10 @@
 #   sbatch scripts/slurm/fold_ensemble_array.sbatch experiment=eu_baseline_r18_image_only
 #   sbatch --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch experiment=eu_resnet50_multimodal
 #   sbatch --array=2-4%2 scripts/slurm/fold_ensemble_array.sbatch experiment=eu_resnet50_multimodal
-set -euo pipefail
+set -eo pipefail
+[[ -f /etc/profile.d/modules.sh ]] && source /etc/profile.d/modules.sh
 ml python/uv
+set -u
 
 export UV_CACHE_DIR="${UV_CACHE_DIR:-/meta/users/$USER/.cache/uv}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/meta/users/$USER/.cache}"

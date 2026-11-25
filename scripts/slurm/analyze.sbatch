@@ -15,8 +15,10 @@
 #   sbatch scripts/slurm/analyze.sbatch
 #   sbatch scripts/slurm/analyze.sbatch analysis.output_dir=/vol/miltank/users/$USER/outputs/analysis_stage2
 #   sbatch scripts/slurm/analyze.sbatch analysis.manifest=/vol/miltank/users/$USER/outputs/analysis/manifest.json
-set -euo pipefail
+set -eo pipefail
+[[ -f /etc/profile.d/modules.sh ]] && source /etc/profile.d/modules.sh
 ml python/uv
+set -u
 
 export UV_CACHE_DIR="${UV_CACHE_DIR:-/meta/users/$USER/.cache/uv}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/meta/users/$USER/.cache}"

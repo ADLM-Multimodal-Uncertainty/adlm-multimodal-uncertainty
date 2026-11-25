@@ -26,7 +26,10 @@ for arg in "$@"; do
     esac
 done
 
+set +u
+[[ -f /etc/profile.d/modules.sh ]] && source /etc/profile.d/modules.sh
 ml python/uv
+set -u
 export UV_CACHE_DIR="${UV_CACHE_DIR:-/meta/users/$USER/.cache/uv}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/meta/users/$USER/.cache}"
 export MPLCONFIGDIR="${MPLCONFIGDIR:-/meta/users/$USER/.cache/matplotlib}"

@@ -13,8 +13,10 @@
 
 # First job for every team member: proves VPN, ssh, miltank/meta storage, uv env, GPU,
 # tests, and (when PAD-UFES-20 is present) a 1-epoch CUDA smoke run all work.
-set -euo pipefail
+set -eo pipefail
+[[ -f /etc/profile.d/modules.sh ]] && source /etc/profile.d/modules.sh
 ml python/uv
+set -u
 
 export UV_CACHE_DIR="${UV_CACHE_DIR:-/meta/users/$USER/.cache/uv}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/meta/users/$USER/.cache}"
