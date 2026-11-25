@@ -12,10 +12,7 @@
 #SBATCH --mem=24G
 
 # Usage: sbatch scripts/slurm/train.sbatch experiment=eu_baseline_r18_multimodal fold=0
-set -eo pipefail
-[[ -f /etc/profile.d/modules.sh ]] && source /etc/profile.d/modules.sh
-ml python/uv
-set -u
+set -euo pipefail
 
 CACHE_BASE="/meta/users/$USER/.cache"
 if [[ ! -d "$CACHE_BASE" || ! -w "$CACHE_BASE" ]]; then
@@ -30,6 +27,11 @@ export OUTPUT_ROOT="${OUTPUT_ROOT:-/vol/miltank/users/$USER/outputs}"
 mkdir -p "$UV_CACHE_DIR" "$XDG_CACHE_HOME" "$MPLCONFIGDIR" "$TORCH_HOME" "$HF_HOME" "$OUTPUT_ROOT/slurm"
 
 cd "${REPO_DIR:-/vol/miltank/users/$USER/code/adlm-multimodal-uncertainty}"
+PYTHON="${PYTHON:-.venv/bin/python}"
+if [[ ! -x "$PYTHON" ]]; then
+    echo "ERROR: $PYTHON not found. Run 'ml python/uv && uv sync' in $PWD first." >&2
+    exit 1
+fi
 
 resolve_data_dir() {
     for candidate in \
@@ -50,8 +52,8 @@ RESOLVED_DATA="$(resolve_data_dir)" || {
     exit 1
 }
 
-echo "commit $(git rev-parse --short HEAD) data=$RESOLVED_DATA output_root=$OUTPUT_ROOT"
-uv run --no-sync python -m src.train \
+echo "commit $(git rev-parse --short HEAD) host=$(hostname) data=$RESOLVED_DATA output_root=$OUTPUT_ROOT"
+"$PYTHON" -m src.train \
     output_root="$OUTPUT_ROOT" \
     data.root="$RESOLVED_DATA" \
     data.num_workers="${NUM_WORKERS:-4}" \

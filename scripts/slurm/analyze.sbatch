@@ -15,10 +15,7 @@
 #   sbatch scripts/slurm/analyze.sbatch
 #   sbatch scripts/slurm/analyze.sbatch analysis.output_dir=/vol/miltank/users/$USER/outputs/analysis_stage2
 #   sbatch scripts/slurm/analyze.sbatch analysis.manifest=/vol/miltank/users/$USER/outputs/analysis/manifest.json
-set -eo pipefail
-[[ -f /etc/profile.d/modules.sh ]] && source /etc/profile.d/modules.sh
-ml python/uv
-set -u
+set -euo pipefail
 
 CACHE_BASE="/meta/users/$USER/.cache"
 if [[ ! -d "$CACHE_BASE" || ! -w "$CACHE_BASE" ]]; then
@@ -33,9 +30,14 @@ export OUTPUT_ROOT="${OUTPUT_ROOT:-/vol/miltank/users/$USER/outputs}"
 mkdir -p "$UV_CACHE_DIR" "$XDG_CACHE_HOME" "$MPLCONFIGDIR" "$TORCH_HOME" "$HF_HOME" "$OUTPUT_ROOT/slurm"
 
 cd "${REPO_DIR:-/vol/miltank/users/$USER/code/adlm-multimodal-uncertainty}"
-echo "commit $(git rev-parse --short HEAD) output_root=$OUTPUT_ROOT"
+PYTHON="${PYTHON:-.venv/bin/python}"
+if [[ ! -x "$PYTHON" ]]; then
+    echo "ERROR: $PYTHON not found. Run 'ml python/uv && uv sync' in $PWD first." >&2
+    exit 1
+fi
+echo "commit $(git rev-parse --short HEAD) host=$(hostname) output_root=$OUTPUT_ROOT"
 
-uv run --no-sync python -m src.analyze \
+"$PYTHON" -m src.analyze \
     analysis.runs_root="$OUTPUT_ROOT/runs" \
     analysis.output_dir="$OUTPUT_ROOT/analysis" \
     "$@"

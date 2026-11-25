@@ -13,10 +13,7 @@
 
 # First job for every team member: proves VPN, ssh, miltank/meta storage, uv env, GPU,
 # tests, and (when PAD-UFES-20 is present) a 1-epoch CUDA smoke run all work.
-set -eo pipefail
-[[ -f /etc/profile.d/modules.sh ]] && source /etc/profile.d/modules.sh
-ml python/uv
-set -u
+set -euo pipefail
 
 CACHE_BASE="/meta/users/$USER/.cache"
 if [[ ! -d "$CACHE_BASE" || ! -w "$CACHE_BASE" ]]; then
@@ -31,11 +28,17 @@ export OUTPUT_ROOT="${OUTPUT_ROOT:-/vol/miltank/users/$USER/outputs}"
 mkdir -p "$UV_CACHE_DIR" "$XDG_CACHE_HOME" "$MPLCONFIGDIR" "$TORCH_HOME" "$HF_HOME" "$OUTPUT_ROOT/slurm"
 
 cd "${REPO_DIR:-/vol/miltank/users/$USER/code/adlm-multimodal-uncertainty}"
-echo "commit $(git rev-parse --short HEAD) branch $(git branch --show-current)"
+PYTHON="${PYTHON:-.venv/bin/python}"
+PYTEST="${PYTEST:-.venv/bin/pytest}"
+if [[ ! -x "$PYTHON" ]]; then
+    echo "ERROR: $PYTHON not found. Run 'ml python/uv && uv sync --extra dev' in $PWD first." >&2
+    exit 1
+fi
+echo "commit $(git rev-parse --short HEAD) branch $(git branch --show-current) host $(hostname)"
 echo "caches: UV=$UV_CACHE_DIR TORCH=$TORCH_HOME MPL=$MPLCONFIGDIR"
 nvidia-smi
-uv run --no-sync python -c "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
-uv run --no-sync pytest -q
+"$PYTHON" -c "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')"
+"$PYTEST" -q
 
 resolve_data_dir() {
     for candidate in \
@@ -54,7 +57,7 @@ resolve_data_dir() {
 
 if RESOLVED_DATA="$(resolve_data_dir)"; then
     echo "running 1-epoch CUDA smoke training with data.root=$RESOLVED_DATA"
-    uv run --no-sync python -m src.train \
+    "$PYTHON" -m src.train \
         experiment=eu_baseline_r18_multimodal \
         '~ensemble' \
         name=cluster_smoke \

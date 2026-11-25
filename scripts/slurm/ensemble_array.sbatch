@@ -26,10 +26,6 @@ for arg in "$@"; do
     esac
 done
 
-set +u
-[[ -f /etc/profile.d/modules.sh ]] && source /etc/profile.d/modules.sh
-ml python/uv
-set -u
 CACHE_BASE="/meta/users/$USER/.cache"
 if [[ ! -d "$CACHE_BASE" || ! -w "$CACHE_BASE" ]]; then
     CACHE_BASE="/vol/miltank/users/$USER/.cache"
@@ -43,6 +39,11 @@ export OUTPUT_ROOT="${OUTPUT_ROOT:-/vol/miltank/users/$USER/outputs}"
 mkdir -p "$UV_CACHE_DIR" "$XDG_CACHE_HOME" "$MPLCONFIGDIR" "$TORCH_HOME" "$HF_HOME" "$OUTPUT_ROOT/slurm"
 
 cd "${REPO_DIR:-/vol/miltank/users/$USER/code/adlm-multimodal-uncertainty}"
+PYTHON="${PYTHON:-.venv/bin/python}"
+if [[ ! -x "$PYTHON" ]]; then
+    echo "ERROR: $PYTHON not found. Run 'ml python/uv && uv sync' in $PWD first." >&2
+    exit 1
+fi
 
 resolve_data_dir() {
     for candidate in \
@@ -65,8 +66,8 @@ RESOLVED_DATA="$(resolve_data_dir)" || {
 
 FOLD=$((SLURM_ARRAY_TASK_ID / 5))
 SEED=$((SLURM_ARRAY_TASK_ID % 5))
-echo "commit $(git rev-parse --short HEAD) fold=${FOLD} seed=${SEED} data=${RESOLVED_DATA}"
-uv run --no-sync python -m src.train \
+echo "commit $(git rev-parse --short HEAD) host=$(hostname) fold=${FOLD} seed=${SEED} data=${RESOLVED_DATA}"
+"$PYTHON" -m src.train \
     fold="${FOLD}" \
     seed="${SEED}" \
     output_root="$OUTPUT_ROOT" \
