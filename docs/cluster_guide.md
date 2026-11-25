@@ -64,10 +64,36 @@ Data layout the code expects (set `DATA_ROOT`):
 
 Put in `~/.bashrc` (that is allowed; it is a dotfile, not data):
 
-    export DATA_ROOT=/vol/miltank/projects/practical_wise2627/<group>/data
-    export OUTPUT_ROOT=/vol/miltank/users/$USER/outputs
-    export WANDB_DIR=/vol/miltank/users/$USER/outputs/wandb
-    export WANDB_API_KEY=<your key>      # or `wandb login` once
+```bash
+export REPO_DIR=/vol/miltank/users/$USER/code/adlm-multimodal-uncertainty
+export DATA_ROOT=/vol/miltank/projects/practical_wise2627/<group>/data
+# Or override DATA_DIR directly if using your own copy under /vol/miltank/users/$USER/data/pad_ufes_20:
+# export DATA_DIR=/vol/miltank/users/$USER/data/pad_ufes_20
+export OUTPUT_ROOT=/vol/miltank/users/$USER/outputs
+export UV_CACHE_DIR=/meta/users/$USER/.cache/uv
+export XDG_CACHE_HOME=/meta/users/$USER/cache
+export TORCH_HOME=/meta/users/$USER/cache/torch
+export MPLCONFIGDIR=/meta/users/$USER/cache/matplotlib
+export WANDB_DIR=/vol/miltank/users/$USER/outputs/wandb
+export WANDB_API_KEY=<your key>      # or `wandb login` once
+```
+
+Also create the SLURM log directory once before submitting any job:
+
+```bash
+mkdir -p /vol/miltank/users/$USER/outputs/slurm
+ls -la ~   # verify home directory contains only dotfiles and symlinks to /meta
+```
+
+If PAD-UFES-20 is not yet in `/vol/miltank/projects/practical_wise2627/<group>/data`, upload it
+from your laptop directly into `/vol/miltank` (never `~`):
+
+```bash
+# Run on your laptop (with VPN connected):
+ssh selene "mkdir -p /vol/miltank/users/<cit-username>/data/pad_ufes_20"
+rsync -avh --progress data/pad_ufes_20/ \
+  selene:/vol/miltank/users/<cit-username>/data/pad_ufes_20/
+```
 
 ## 5. SLURM
 
@@ -79,19 +105,113 @@ Two QoS:
 - `master`: unlimited jobs, pre-empted by higher priority, not scheduled under full load. Use for sweeps.
 
 Rules
-- Request a GPU only if the job uses one.
-- Fewer than 32 CPUs, well below 128 GB RAM.
-- Long-running anything (training, preprocessing, downloads) goes through sbatch, not selene.
+- Request a GPU only if the job uses one (never request `--gres=gpu` for analysis/plotting).
+- Fewer than 32 CPUs (6 is enough for ResNet18/50), well below 128 GB RAM (24 GB is enough).
+- Long-running anything (training, preprocessing, downloads, analysis) goes through `sbatch`, not `selene`.
 - No training in notebooks.
-- All data, scripts, outputs, checkpoints on `/vol/miltank/...`.
+- All data, scripts, outputs, checkpoints and SLURM logs on `/vol/miltank/...`; caches on `/meta/users/$USER/...`.
+- Check storage regularly: `du -sh /vol/miltank/users/$USER` (500 GB group limit).
 
 Templates in `scripts/slurm/`:
-- `smoke_test.sbatch`: 5-minute GPU job that prints `nvidia-smi` and imports torch. Run this first.
-- `train.sbatch`: single training run, config via Hydra overrides.
-- `ensemble_array.sbatch`: job array over fold x seed (25 tasks) for a deep ensemble.
+- `smoke_test.sbatch`: 15-minute GPU job (`master-queuesave`) verifying `nvidia-smi`, CUDA PyTorch,
+  `/meta` caches, `pytest -q`, and a 1-epoch CUDA smoke run on `/vol/miltank` data. Run this first.
+- `train.sbatch`: single training run on 1 GPU, config via Hydra overrides.
+- `fold_ensemble_array.sbatch`: fold-level job array (`--array=0-4%2`) for `DeepEnsemble` presets
+  (`eu_*`, `deep_ensemble*`). Each task runs one complete 5-member ensemble fold; `%2` respects
+  `master-queuesave`'s 2-job limit. Override with `--array=0-1%2` for 2-fold screening or
+  `--array=2-4%2` to expand remaining folds.
+- `ensemble_array.sbatch`: 25-task fold x seed array for non-ensemble (`ensemble=null`) presets only.
+- `analyze.sbatch`: **CPU-only** job (no GPU requested) running `python -m src.analyze` on completed
+  runs under `$OUTPUT_ROOT/runs` to write all tables, EU metrics, and plots to `$OUTPUT_ROOT/analysis`.
 
-Job arrays: `#SBATCH --array=0-24%2` runs 25 tasks, 2 at a time (fits master-queuesave).
-`fold = SLURM_ARRAY_TASK_ID // 5`, `seed = SLURM_ARRAY_TASK_ID % 5`.
+## 5b. Running the Paired EU Experiments on the Cluster
+
+All four `eu_*` presets keep the backbone fully trainable (`freeze=false`), use ImageNet weights,
+AdamW `lr=1e-4`, five ensemble seeds `[0,1,2,3,4]`, and the committed 5-fold patient split.
+Every completed fold saves `best.pt`, `history.csv`, `test_member_predictions.npz` (probabilities
+and raw logits), and `val_member_predictions.npz` (validation logits and probabilities), so all
+downstream calibration, EU measures, and plots run on CPU without retraining.
+
+### Step 0: Commit, push, pull on `selene`, and run the smoke test
+
+```bash
+# On laptop:
+git push -u origin feature/paired-eu-experiments
+
+# On selene:
+cd /vol/miltank/users/$USER/code/adlm-multimodal-uncertainty
+git fetch origin && git checkout feature/paired-eu-experiments && git pull
+uv sync --extra dev
+mkdir -p /vol/miltank/users/$USER/outputs/slurm
+sbatch scripts/slurm/smoke_test.sbatch
+squeue -u $USER
+```
+
+Wait until `smoke_test` finishes with `COMPLETED` (`sacct -j <jobid>`) and check its log in
+`/vol/miltank/users/$USER/outputs/slurm/`.
+
+### Stage 1: Baseline (ResNet18, all 5 folds)
+
+```bash
+sbatch scripts/slurm/fold_ensemble_array.sbatch experiment=eu_baseline_r18_image_only
+sbatch scripts/slurm/fold_ensemble_array.sbatch experiment=eu_baseline_r18_multimodal
+```
+
+### Stage 2: Experiment 6 (ResNet50, screen on folds 0-1 first)
+
+```bash
+sbatch --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch experiment=eu_resnet50_image_only
+sbatch --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch experiment=eu_resnet50_multimodal
+```
+
+Run the CPU-only analysis to check the Experiment 6 decision rule in `summary_tables.md`:
+
+```bash
+sbatch scripts/slurm/analyze.sbatch
+```
+
+Expand ResNet50 to folds 2-4 **only if** `summary_tables.md` flags a dEU sign/CI shift or a
+balanced-accuracy change > 2 percentage points:
+
+```bash
+sbatch --array=2-4%2 scripts/slurm/fold_ensemble_array.sbatch experiment=eu_resnet50_image_only
+sbatch --array=2-4%2 scripts/slurm/fold_ensemble_array.sbatch experiment=eu_resnet50_multimodal
+```
+
+### Stage 3: Experiment 4 (Positive control: 25% and 50% training patients, reusing 100%)
+
+Use the chosen encoder from Stage 2 (`eu_baseline_r18_*` if keeping ResNet18, or `eu_resnet50_*`
+if switching to ResNet50). Always pass a distinct `name=...` so fractions do not overwrite the
+100% baseline runs:
+
+```bash
+# Example with ResNet18 (swap experiment=... and r18 -> r50 if ResNet50 won Stage 2):
+sbatch --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
+  experiment=eu_baseline_r18_image_only data.train_fraction=0.25 name=eu_size_r18_f025_image_only
+sbatch --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
+  experiment=eu_baseline_r18_multimodal data.train_fraction=0.25 name=eu_size_r18_f025_multimodal
+sbatch --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
+  experiment=eu_baseline_r18_image_only data.train_fraction=0.5 name=eu_size_r18_f050_image_only
+sbatch --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
+  experiment=eu_baseline_r18_multimodal data.train_fraction=0.5 name=eu_size_r18_f050_multimodal
+```
+
+Run the CPU-only analysis again (`sbatch scripts/slurm/analyze.sbatch`) and check
+`positive_control_summary.csv` and `summary_tables.md`. If EU does not decrease monotonically
+or the 25%-vs-100% patient bootstrap CI includes 0, expand folds 2-4 with `--array=2-4%2` using
+the exact same `name=...` overrides, then run `sbatch scripts/slurm/analyze.sbatch` one final time.
+
+### Pull lightweight analysis tables and plots back to your laptop
+
+Do **not** transfer large `.pt` checkpoints back to your laptop; sync only `outputs/analysis/`:
+
+```bash
+# Run on your laptop (with VPN connected):
+mkdir -p outputs/cluster_analysis
+rsync -avh --progress \
+  selene:/vol/miltank/users/<cit-username>/outputs/analysis/ \
+  outputs/cluster_analysis/
+```
 
 ## 6. Interactive debugging (shs: VS Code / Jupyter inside a SLURM job)
 

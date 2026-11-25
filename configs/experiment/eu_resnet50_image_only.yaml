@@ -1,0 +1,19 @@
+# @package _global_
+defaults:
+  - deep_ensemble_image_only
+  - override /split: patient_kfold
+  - override /model/image_encoder: resnet50
+
+name: eu_resnet50_image_only
+split:
+  n_folds: 5
+model:
+  image_encoder:
+    freeze: false
+train:
+  optimizer:
+    lr: 1.0e-4
+hydra:
+  sweeper:
+    params:
+      fold: range(0,${split.n_folds})

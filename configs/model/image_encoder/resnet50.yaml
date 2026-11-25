@@ -1,0 +1,6 @@
+_target_: src.models.image_encoder.TorchvisionResNetEncoder
+arch: resnet50
+pretrained: true
+freeze: false
+proj_dim: 128
+dropout: 0.2

@@ -1,0 +1,10 @@
+defaults:
+  - analysis: paired
+  - _self_
+
+hydra:
+  run:
+    dir: ${analysis.output_dir}/hydra
+  output_subdir: null
+  job:
+    chdir: false

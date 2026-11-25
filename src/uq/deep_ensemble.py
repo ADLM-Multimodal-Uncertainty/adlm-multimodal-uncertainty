@@ -3,6 +3,7 @@
 Members retain ordinary run artifacts. Evaluation rebuilds every member from its
 saved configuration and checkpoint, loading one model at a time.
 """
+import json
 from pathlib import Path
 
 import numpy as np
@@ -35,12 +36,38 @@ def uncertainty(member_probs: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.nd
     return total, aleatoric, np.maximum(total - aleatoric, 0)
 
 
-def evaluate_ensemble(run_dir: Path, device: torch.device) -> dict:
-    import json
+def _load_member_npz(path: Path) -> dict[str, np.ndarray]:
+    with np.load(path, allow_pickle=False) as saved:
+        return {key: saved[key].copy() for key in saved.files}
 
+
+def _stack_member_split(
+    member_dirs: list[Path], filename: str, seeds: list[int]
+) -> dict[str, np.ndarray] | None:
+    paths = [member_dir / filename for member_dir in member_dirs]
+    if not all(path.exists() for path in paths):
+        return None
+    loaded = [_load_member_npz(path) for path in paths]
+    first = loaded[0]
+    for item in loaded[1:]:
+        for key in ("img_ids", "patient_ids", "labels", "classes"):
+            if not np.array_equal(item[key], first[key]):
+                raise ValueError(f"ensemble members disagree on {filename}:{key}")
+    return {
+        "logits": np.stack([item["logits"] for item in loaded]),
+        "probabilities": np.stack([item["probabilities"] for item in loaded]),
+        "labels": first["labels"],
+        "img_ids": first["img_ids"],
+        "patient_ids": first["patient_ids"],
+        "classes": first["classes"],
+        "seeds": np.asarray(seeds),
+    }
+
+
+def evaluate_ensemble(run_dir: Path, device: torch.device) -> dict:
     cfg = OmegaConf.load(run_dir / "config.yaml")
     ensemble = instantiate(cfg.ensemble)
-    frames, epochs = [], []
+    frames, epochs, member_dirs = [], [], []
     for seed in ensemble.seeds:
         member_dir = run_dir / "members" / f"seed_{seed}"
         metrics = evaluate_run(member_dir, device)
@@ -53,6 +80,7 @@ def evaluate_ensemble(run_dir: Path, device: torch.device) -> dict:
             raise ValueError("ensemble members must use identical ordered test samples")
         frames.append(frame)
         epochs.append(metrics["best_epoch"])
+        member_dirs.append(member_dir)
 
     columns = [f"p_{c}" for c in CLASSES]
     member_probs = np.stack([frame[columns].to_numpy() for frame in frames])
@@ -66,7 +94,7 @@ def evaluate_ensemble(run_dir: Path, device: torch.device) -> dict:
     predictions["epistemic_uncertainty"] = epistemic
     labels = predictions["diagnostic"].map(CLASSES.index).to_numpy()
     metrics = {
-        **detailed_metrics(labels, probs.argmax(axis=1), CLASSES),
+        **detailed_metrics(labels, probs.argmax(axis=1), CLASSES, probs),
         "n_images": len(labels),
         "n_patients": int(predictions.patient_id.nunique()),
         "n_members": len(ensemble.seeds),
@@ -74,11 +102,22 @@ def evaluate_ensemble(run_dir: Path, device: torch.device) -> dict:
         "member_best_epochs": epochs,
     }
     predictions.to_csv(run_dir / "test_predictions.csv", index=False)
-    np.savez_compressed(
-        run_dir / "test_member_predictions.npz", probabilities=member_probs,
-        labels=labels, img_ids=predictions.img_id.to_numpy(dtype=str),
-        patient_ids=predictions.patient_id.to_numpy(dtype=str),
-        classes=np.asarray(CLASSES), seeds=np.asarray(ensemble.seeds),
-    )
+    test_payload: dict[str, np.ndarray] = {
+        "probabilities": member_probs,
+        "labels": labels,
+        "img_ids": predictions.img_id.to_numpy(dtype=str),
+        "patient_ids": predictions.patient_id.to_numpy(dtype=str),
+        "classes": np.asarray(CLASSES),
+        "seeds": np.asarray(ensemble.seeds),
+    }
+    stacked_test = _stack_member_split(member_dirs, "test_logits.npz", ensemble.seeds)
+    if stacked_test is not None:
+        test_payload["logits"] = stacked_test["logits"]
+    np.savez_compressed(run_dir / "test_member_predictions.npz", **test_payload)
+
+    stacked_val = _stack_member_split(member_dirs, "val_logits.npz", ensemble.seeds)
+    if stacked_val is not None:
+        np.savez_compressed(run_dir / "val_member_predictions.npz", **stacked_val)
+
     (run_dir / "test_metrics.json").write_text(json.dumps(metrics, indent=2))
     return metrics

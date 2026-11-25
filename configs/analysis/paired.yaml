@@ -1,0 +1,7 @@
+_target_: src.analysis.PairedAnalysis
+manifest: null
+runs_root: null
+metadata_csv: null
+output_dir: outputs/analysis/paired
+bootstrap_samples: 5000
+seed: 42

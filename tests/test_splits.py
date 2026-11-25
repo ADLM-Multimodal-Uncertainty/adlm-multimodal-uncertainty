@@ -1,6 +1,7 @@
 import pandas as pd
 import pytest
 
+from src.data.dataset import subsample_training_patients
 from src.data.splits import PatientHoldoutSplit, PatientKFoldSplit, check_patient_disjoint
 
 from .conftest import REPO, synthetic_metadata
@@ -150,3 +151,25 @@ def test_two_fold_csv_uses_inner_patient_validation(tmp_path):
     assert all(not p.empty for p in parts.values())
     assert set(parts["test"]["fold"]) == {0}
     assert set(parts["train"]["fold"]) == set(parts["val"]["fold"]) == {1}
+
+
+def test_training_patient_subsets_are_deterministic_stratified_and_nested():
+    df = synthetic_metadata()
+    quarter = subsample_training_patients(df, 0.25, seed=42)
+    repeated = subsample_training_patients(df.sample(frac=1), 0.25, seed=42)
+    half = subsample_training_patients(df, 0.5, seed=42)
+    full = subsample_training_patients(df, 1.0, seed=42)
+
+    quarter_patients = set(quarter["patient_id"])
+    half_patients = set(half["patient_id"])
+    full_patients = set(full["patient_id"])
+    assert quarter_patients == set(repeated["patient_id"])
+    assert quarter_patients < half_patients < full_patients
+    assert len(quarter_patients) == 30
+    assert len(half_patients) == 60
+    assert all(set(part["diagnostic"]) == set(df["diagnostic"]) for part in (quarter, half))
+
+
+def test_training_patient_subset_rejects_unsupported_fraction():
+    with pytest.raises(ValueError, match="train_fraction"):
+        subsample_training_patients(synthetic_metadata(), 0.3, seed=42)

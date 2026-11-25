@@ -16,6 +16,7 @@ from .conftest import REPO
 
 CONFIGS = REPO / "configs"
 GROUPS = [
+    "analysis",
     "split",
     "model/image_encoder",
     "model/tabular_encoder",
@@ -24,7 +25,11 @@ GROUPS = [
     "ensemble",
     "experiment",
 ]
-OVERRIDES = [f"{g}={p.stem}" for g in GROUPS for p in sorted((CONFIGS / g).glob("*.yaml"))]
+OVERRIDES = [
+    f"{'+' if g == 'analysis' else ''}{g}={p.stem}"
+    for g in GROUPS
+    for p in sorted((CONFIGS / g).glob("*.yaml"))
+]
 OFFLINE = ["model.image_encoder.pretrained=false", "model.image_encoder.freeze=false"]
 
 
@@ -106,3 +111,32 @@ def test_default_patient_folds_and_backbone_training():
     assert cfg.split.n_folds == 2
     assert cfg.model.image_encoder.freeze is False
     assert cfg.model.image_encoder.pretrained is True
+
+
+@pytest.mark.parametrize(
+    ("experiment", "architecture", "uses_metadata"),
+    [
+        ("eu_baseline_r18_multimodal", "resnet18", True),
+        ("eu_baseline_r18_image_only", "resnet18", False),
+        ("eu_resnet50_multimodal", "resnet50", True),
+        ("eu_resnet50_image_only", "resnet50", False),
+    ],
+)
+def test_eu_experiment_presets_fully_fine_tune_five_member_ensembles(
+    experiment, architecture, uses_metadata
+):
+    cfg = _compose([f"experiment={experiment}"])
+    assert cfg.split.n_folds == 5
+    assert cfg.model.image_encoder.arch == architecture
+    assert cfg.model.image_encoder.freeze is False
+    assert cfg.train.optimizer.lr == pytest.approx(1e-4)
+    assert list(cfg.ensemble.seeds) == [0, 1, 2, 3, 4]
+    assert (cfg.model.get("tabular_encoder") is not None) is uses_metadata
+
+
+def test_analyze_config_composes_and_matches_target():
+    with initialize_config_dir(config_dir=str(CONFIGS), version_base="1.3"):
+        cfg = compose("analyze")
+    node = OmegaConf.to_container(cfg.analysis, resolve=True)
+    kwargs = {k: v for k, v in node.items() if not k.startswith("_")}
+    inspect.signature(get_object(node["_target_"])).bind_partial(**kwargs)

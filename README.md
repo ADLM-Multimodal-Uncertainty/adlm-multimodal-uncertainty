@@ -133,6 +133,70 @@ Load it with `numpy.load(path, allow_pickle=False)`. Re-evaluation uses each mem
 config and checkpoint and regenerates the aggregate artifacts; it requires the original data.
 Training curves and confusion matrix plots remain in each member directory.
 
+## Paired EU experiments
+
+The named EU presets use the committed five-fold patient split, five ensemble members,
+ImageNet initialization, full backbone fine-tuning and an AdamW learning rate of `1e-4`.
+Run the ResNet18 baseline on all folds:
+
+```bash
+scripts/local/run.sh -m experiment=eu_baseline_r18_image_only
+scripts/local/run.sh -m experiment=eu_baseline_r18_multimodal
+```
+
+Screen ResNet50 on two of the same five rotations:
+
+```bash
+scripts/local/run.sh -m experiment=eu_resnet50_image_only fold=0,1
+scripts/local/run.sh -m experiment=eu_resnet50_multimodal fold=0,1
+```
+
+The training-size positive control selects nested, diagnosis-stratified subsets of training
+patients while leaving validation and test unchanged. Always change `name` so fractions do not
+overwrite the full-data runs:
+
+```bash
+scripts/local/run.sh -m experiment=eu_baseline_r18_image_only fold=0,1 \
+  data.train_fraction=0.25 name=eu_size_r18_f025_image_only
+scripts/local/run.sh -m experiment=eu_baseline_r18_multimodal fold=0,1 \
+  data.train_fraction=0.25 name=eu_size_r18_f025_multimodal
+```
+
+Use `0.5` for the half-data condition and reuse the matching full-data artifacts. The supported
+fractions are `0.25`, `0.5`, and `1.0`; `data.train_subset_seed` controls the nested patient
+assignment.
+
+Paired analysis can either auto-discover all completed paired runs under a `runs/` folder or
+consume an explicit JSON manifest:
+
+```bash
+# Auto-discover all completed paired ensembles under outputs/runs:
+uv run python -m src.analyze \
+  analysis.runs_root=outputs/runs \
+  analysis.output_dir=outputs/analysis/paired
+
+# Or use an explicit manifest:
+uv run python -m src.analyze \
+  analysis.manifest=outputs/analysis/manifest.json \
+  analysis.output_dir=outputs/analysis/paired
+```
+
+Analysis verifies full pairing compatibility and writes:
+- Per condition (`outputs/analysis/paired/<condition>/`): `per_image.csv`, `per_patient.csv`,
+  `uncertainty_summary.csv`, `per_fold_summary.csv`, `training_curves.csv`,
+  `error_detection_summary.csv`, `risk_coverage.csv`, `aurc_summary.csv`,
+  `ensemble_size_stability.csv`, `missing_metadata_summary.csv`, `classification_metrics.json`,
+  and plots (`loss_accuracy_curves.png`, `uncertainty.png`, `paired_eu_scatter.png`,
+  `correct_vs_incorrect_eu.png`, `risk_coverage.png`, `classification.png`, `calibration.png`,
+  `fold_comparison.png`, `ensemble_size_stability.png`, `missing_metadata_stratification.png`).
+- Across all conditions (`outputs/analysis/paired/`): `condition_comparison.csv/json`,
+  `all_folds_comparison.csv`, `eu_measures_agreement.csv`, `positive_control_summary.csv`,
+  `summary_tables.md`, and cross-setup plots (`condition_comparison.png`,
+  `eu_measures_comparison.png`, `cross_setup_fold_eu.png`, `cross_setup_learning_curves.png`,
+  `train_fraction.png`).
+
+For TUM chair cluster execution, see `docs/cluster_guide.md` and `scripts/slurm/`.
+
 ## Freeze or fine-tune ResNet18
 
 Toggle `model.image_encoder.freeze` in any experiment. The default is `false`:
@@ -263,7 +327,7 @@ train:
 
 Open design questions, their options and implementation status: `docs/design_decisions.md`.
 
-Cluster: `docs/cluster_guide.md` and `scripts/slurm/` (not yet wired to these configs).
+Cluster: `docs/cluster_guide.md` and `scripts/slurm/`.
 
 ## Layout
 

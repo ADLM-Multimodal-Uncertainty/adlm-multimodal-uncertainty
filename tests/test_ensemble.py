@@ -43,12 +43,23 @@ def test_ensemble_pipeline(experiment, synthetic_root, tmp_path):
     predictions = pd.read_csv(run_dir / 'test_predictions.csv')
     with np.load(run_dir / 'test_member_predictions.npz', allow_pickle=False) as saved:
         assert saved['probabilities'].shape == (2, len(predictions), 6)
+        assert saved['logits'].shape == (2, len(predictions), 6)
         np.testing.assert_array_equal(saved['seeds'], [3, 7])
         np.testing.assert_allclose(saved['probabilities'].sum(axis=-1), 1, atol=1e-6)
+        np.testing.assert_allclose(
+            torch.softmax(torch.from_numpy(saved['logits']), dim=-1).numpy(),
+            saved['probabilities'],
+            atol=1e-5,
+        )
         np.testing.assert_allclose(
             saved['probabilities'].mean(axis=0),
             predictions[[f'p_{c}' for c in saved['classes']]],
         )
+    with np.load(run_dir / 'val_member_predictions.npz', allow_pickle=False) as val_saved:
+        assert val_saved['probabilities'].ndim == 3
+        assert val_saved['probabilities'].shape[0] == 2
+        assert val_saved['logits'].shape == val_saved['probabilities'].shape
+        np.testing.assert_array_equal(val_saved['seeds'], [3, 7])
     np.testing.assert_allclose(
         predictions.total_uncertainty,
         predictions.aleatoric_uncertainty + predictions.epistemic_uncertainty,

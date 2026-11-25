@@ -10,6 +10,7 @@ import pandas as pd
 import torch
 from omegaconf import DictConfig
 from PIL import Image, ImageOps
+from sklearn.model_selection import StratifiedKFold
 from torch.utils.data import Dataset
 
 from src import CLASSES
@@ -85,12 +86,62 @@ class FoldData:
     n_meta_features: int
 
 
+def subsample_training_patients(
+    df: pd.DataFrame, fraction: float, seed: int
+) -> pd.DataFrame:
+    """Select nested, diagnosis-stratified patient subsets for the size control."""
+    allowed = (0.25, 0.5, 1.0)
+    match = next((value for value in allowed if np.isclose(fraction, value)), None)
+    if match is None:
+        raise ValueError(f"train_fraction must be one of {allowed}, got {fraction}")
+    if match == 1.0:
+        return df.copy()
+
+    def patient_label(values: pd.Series) -> str:
+        counts = values.value_counts()
+        return sorted(counts[counts == counts.max()].index)[0]
+
+    patients = (
+        df.groupby("patient_id", sort=True)["diagnostic"]
+        .agg(patient_label)
+        .rename("diagnostic")
+        .reset_index()
+    )
+    class_patient_counts = patients["diagnostic"].value_counts()
+    if (class_patient_counts < 4).any():
+        sparse = class_patient_counts[class_patient_counts < 4].to_dict()
+        raise ValueError(f"need at least four training patients per class, got {sparse}")
+
+    splitter = StratifiedKFold(n_splits=4, shuffle=True, random_state=seed)
+    patient_folds = [
+        test
+        for _, test in splitter.split(
+            np.zeros(len(patients), dtype=np.uint8), patients["diagnostic"]
+        )
+    ]
+    fold_count = int(match * 4)
+    selected_indices = np.concatenate(patient_folds[:fold_count])
+    selected_patients = set(patients.iloc[selected_indices]["patient_id"])
+    selected = df[df["patient_id"].isin(selected_patients)].copy()
+
+    missing_classes = set(df["diagnostic"]) - set(selected["diagnostic"])
+    if missing_classes:
+        raise ValueError(
+            f"train_fraction={match} omitted classes: {sorted(missing_classes)}"
+        )
+    return selected
+
+
 def build_fold(cfg: DictConfig, split: Split, fold: int) -> FoldData:
     """Partition with `split`, fit the metadata preprocessor on the training rows only, and
     build the three datasets. Deterministic, so evaluation can rebuild it from the config."""
     parts = split.partition(load_metadata(cfg.metadata_csv), fold)
     if cfg.subset:
         parts = {name: part.head(int(cfg.subset)) for name, part in parts.items()}
+    elif not np.isclose(float(cfg.train_fraction), 1.0):
+        parts["train"] = subsample_training_patients(
+            parts["train"], float(cfg.train_fraction), int(cfg.train_subset_seed)
+        )
 
     numeric, categorical = list(cfg.numeric_features), list(cfg.categorical_features)
     preprocessor = make_preprocessor(numeric, categorical)

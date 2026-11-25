@@ -4,6 +4,8 @@ image_dir: ${data.root}/images     # searched recursively (flat or imgs_part_*/)
 
 image_size: 224
 subset: null            # int: keep only the first N rows of each partition (smoke runs)
+train_fraction: 1.0     # patient-level nested control: 0.25, 0.5, or 1.0
+train_subset_seed: 42
 num_workers: 0
 
 # biopsed (how the label was verified) and the ID columns would leak the label; never list them.
