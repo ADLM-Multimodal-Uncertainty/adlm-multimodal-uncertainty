@@ -1,0 +1,6 @@
+# @package _global_
+defaults:
+  - yannic_2fold_ensemble
+  - override /model/tabular_encoder: null
+
+name: yannic_2fold_image_only

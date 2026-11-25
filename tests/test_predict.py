@@ -35,6 +35,7 @@ def test_loss_is_the_mean_over_all_samples_regardless_of_batch_size(batch_size):
     assert result.loss == pytest.approx(criterion(logits, labels).item(), rel=1e-6)
     np.testing.assert_allclose(result.probs, torch.softmax(logits, dim=1).numpy(), rtol=1e-6)
     np.testing.assert_array_equal(result.labels, labels.numpy())
+    np.testing.assert_array_equal(result.logits, logits.numpy())
 
 
 def test_no_criterion_means_no_loss():

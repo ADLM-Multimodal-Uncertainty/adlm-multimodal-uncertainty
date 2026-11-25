@@ -2,8 +2,8 @@
 
     python -m src.evaluate outputs/runs/<run_name>
 
-`src.train` calls this automatically after training. The fold (including the metadata
-preprocessor) is rebuilt from the run's saved config instead of being pickled.
+`src.train` calls this automatically after training. New runs restore saved split rows
+and fitted preprocessing; older runs rebuild them from the original metadata/config.
 """
 
 from __future__ import annotations
@@ -41,6 +41,7 @@ class Predictions:
     probs: np.ndarray  # (N, K)
     labels: np.ndarray  # (N,)
     loss: float | None  # mean `criterion` over the loader, None without a criterion
+    logits: np.ndarray | None = None
 
 
 @torch.no_grad()
@@ -51,18 +52,19 @@ def predict(
     criterion: nn.Module | None = None,
 ) -> Predictions:
     """Probabilities, labels and optionally the loss. Does not change the train/eval mode."""
-    probs, labels = [], []
+    probs, labels, raw_logits = [], [], []
     loss_sum = 0.0
     for batch in loader:
         meta = batch["meta"].to(device) if model.uses_metadata else None
         logits = model(batch["image"].to(device), meta).float()
         if criterion is not None:
             loss_sum += criterion(logits, batch["label"].to(device)).item() * len(batch["label"])
+        raw_logits.append(logits.cpu().numpy())
         probs.append(torch.softmax(logits, dim=1).cpu().numpy())
         labels.append(batch["label"].numpy())
     labels = np.concatenate(labels)
     loss = loss_sum / len(labels) if criterion is not None else None
-    return Predictions(np.concatenate(probs), labels, loss)
+    return Predictions(np.concatenate(probs), labels, loss, np.concatenate(raw_logits))
 
 
 def evaluate_run(run_dir: Path, device: torch.device) -> dict:
@@ -71,16 +73,24 @@ def evaluate_run(run_dir: Path, device: torch.device) -> dict:
         from src.uq.deep_ensemble import evaluate_ensemble
 
         return evaluate_ensemble(run_dir, device)
-    data = build_fold(cfg.data, instantiate(cfg.split), cfg.fold)
+    data = build_fold(cfg.data, instantiate(cfg.split), cfg.fold, artifacts_dir=run_dir)
     model = build_model(cfg.model, len(CLASSES), data.n_meta_features)
     state = torch.load(run_dir / "best.pt", map_location="cpu", weights_only=True)
     model.load_state_dict(state["state_dict"])
     model.to(device).eval()
 
-    loader = DataLoader(
-        data.test, batch_size=cfg.train.batch_size, num_workers=cfg.data.num_workers
-    )
-    prediction = predict(model, loader, device)
+    for partition, dataset in (("val", data.val), ("test", data.test)):
+        loader = DataLoader(dataset, batch_size=cfg.train.batch_size,
+                            num_workers=cfg.data.num_workers)
+        prediction = predict(model, loader, device)
+        np.savez_compressed(
+            run_dir / f"{partition}_predictions.npz",
+            probabilities=prediction.probs, logits=prediction.logits,
+            labels=prediction.labels, classes=np.asarray(CLASSES),
+            img_ids=dataset.df.img_id.to_numpy(dtype=str),
+            patient_ids=dataset.df.patient_id.to_numpy(dtype=str),
+        )
+    # The last prediction above is the test partition.
     probs, labels = prediction.probs, prediction.labels
     preds = probs.argmax(axis=1)
     test_df = data.test.df

@@ -78,11 +78,15 @@ def train_run(cfg: DictConfig) -> None:
     device = resolve_device(cfg.device)
     run_dir = Path(cfg.run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
+    if (run_dir / "best.pt").exists():
+        raise FileExistsError(f"checkpoint already exists in {run_dir}; choose a new name")
     OmegaConf.save(cfg, run_dir / "config.yaml", resolve=True)
     log.info("run %s on %s", cfg.run_name, device)
 
     data = build_fold(cfg.data, instantiate(cfg.split), cfg.fold)
+    from src.run_artifacts import save_run_artifacts
     model = build_model(cfg.model, len(CLASSES), data.n_meta_features).to(device)
+    save_run_artifacts(run_dir, cfg, data, model)
     train_loader = DataLoader(
         data.train, batch_size=cfg.train.batch_size, shuffle=True, num_workers=cfg.data.num_workers
     )

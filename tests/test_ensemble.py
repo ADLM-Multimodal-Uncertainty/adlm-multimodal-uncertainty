@@ -30,16 +30,18 @@ def test_entropy_decomposition():
 
 
 @pytest.mark.parametrize("experiment", ["deep_ensemble", "deep_ensemble_image_only"])
-def test_ensemble_pipeline(experiment, synthetic_root, tmp_path):
+@pytest.mark.parametrize("split", ["patient_holdout", "patient_kfold"])
+def test_ensemble_pipeline(experiment, split, synthetic_root, tmp_path):
     result = subprocess.run([
         sys.executable, "-m", "src.train", f"experiment={experiment}",
         "ensemble.seeds=[3,7]", f"data.root={synthetic_root}",
         f"output_root={tmp_path / 'outputs'}", "data.image_size=32",
         "train.epochs=1", "train.batch_size=16", "device=cpu",
         "model.image_encoder.pretrained=false", "model.image_encoder.freeze=false",
+        f"split={split}",
     ], cwd=REPO, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    run_dir = tmp_path / 'outputs' / 'runs' / f'{experiment}-patient_holdout-f0-s42'
+    run_dir = tmp_path / 'outputs' / 'runs' / f'{experiment}-{split}-f0-s42'
     predictions = pd.read_csv(run_dir / 'test_predictions.csv')
     with np.load(run_dir / 'test_member_predictions.npz', allow_pickle=False) as saved:
         assert saved['probabilities'].shape == (2, len(predictions), 6)
@@ -49,6 +51,19 @@ def test_ensemble_pipeline(experiment, synthetic_root, tmp_path):
             saved['probabilities'].mean(axis=0),
             predictions[[f'p_{c}' for c in saved['classes']]],
         )
+    for partition in ('val', 'test'):
+        with np.load(run_dir / f'{partition}_member_predictions.npz', allow_pickle=False) as saved:
+            logits = torch.from_numpy(saved['logits'])
+            np.testing.assert_allclose(torch.softmax(logits, dim=-1).numpy(),
+                                       saved['probabilities'], rtol=1e-6)
+    for seed in [3, 7]:
+        member = run_dir / 'members' / f'seed_{seed}'
+        for artifact in ('split_metadata.csv', 'metadata_missingness.csv',
+                         'metadata_preprocessor.joblib',
+                         'provenance.json', 'image_hashes.json', 'source_snapshot/src/train.py'):
+            assert (member / artifact).exists()
+        rows = pd.read_csv(member / 'split_metadata.csv')
+        assert rows.groupby('patient_id').partition.nunique().max() == 1
     np.testing.assert_allclose(
         predictions.total_uncertainty,
         predictions.aleatoric_uncertainty + predictions.epistemic_uncertainty,
@@ -56,6 +71,8 @@ def test_ensemble_pipeline(experiment, synthetic_root, tmp_path):
     )
     for seed in [3, 7]:
         assert (run_dir / 'members' / f'seed_{seed}' / 'best.pt').exists()
+    # New runs must not depend on the mutable source metadata during re-evaluation.
+    (synthetic_root / 'metadata.csv').unlink()
     metrics = evaluate_run(run_dir, torch.device('cpu'))
     assert metrics['n_members'] == 2
     pd.testing.assert_frame_equal(predictions, pd.read_csv(run_dir / 'test_predictions.csv'))

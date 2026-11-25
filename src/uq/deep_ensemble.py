@@ -54,6 +54,25 @@ def evaluate_ensemble(run_dir: Path, device: torch.device) -> dict:
         frames.append(frame)
         epochs.append(metrics["best_epoch"])
 
+    for partition in ("val", "test"):
+        archives = []
+        for seed in ensemble.seeds:
+            with np.load(run_dir / "members" / f"seed_{seed}" /
+                         f"{partition}_predictions.npz", allow_pickle=False) as archive:
+                archives.append({key: archive[key] for key in archive.files})
+        for archive in archives[1:]:
+            for key in ("img_ids", "patient_ids", "labels", "classes"):
+                if not np.array_equal(archive[key], archives[0][key]):
+                    raise ValueError(f"ensemble {partition} {key} mismatch")
+        np.savez_compressed(
+            run_dir / f"{partition}_member_predictions.npz",
+            probabilities=np.stack([a["probabilities"] for a in archives]),
+            logits=np.stack([a["logits"] for a in archives]),
+            seeds=np.asarray(ensemble.seeds),
+            **{key: archives[0][key] for key in
+               ("img_ids", "patient_ids", "labels", "classes")},
+        )
+
     columns = [f"p_{c}" for c in CLASSES]
     member_probs = np.stack([frame[columns].to_numpy() for frame in frames])
     probs = member_probs.mean(axis=0)
@@ -74,11 +93,5 @@ def evaluate_ensemble(run_dir: Path, device: torch.device) -> dict:
         "member_best_epochs": epochs,
     }
     predictions.to_csv(run_dir / "test_predictions.csv", index=False)
-    np.savez_compressed(
-        run_dir / "test_member_predictions.npz", probabilities=member_probs,
-        labels=labels, img_ids=predictions.img_id.to_numpy(dtype=str),
-        patient_ids=predictions.patient_id.to_numpy(dtype=str),
-        classes=np.asarray(CLASSES), seeds=np.asarray(ensemble.seeds),
-    )
     (run_dir / "test_metrics.json").write_text(json.dumps(metrics, indent=2))
     return metrics

@@ -288,3 +288,15 @@ results with and without missingness indicators and on complete rows only. (Deci
 - Develop every new feature on a dedicated branch; never directly on `main` or `master`.
   Create and switch to the feature branch before editing. Merge via PR with at least one
   review and passing CI. Coding agents must follow the same rule (see `AGENTS.md`).
+
+## Uncertainty analysis artifacts
+
+See [the paired analysis plan](docs/uncertainty_analysis.md) for metrics, formulas,
+figures, encoder protocol and the full artifact contract. New runs preserve raw
+validation/test logits and member probabilities, exact split metadata, fitted
+preprocessing, data hashes, environment provenance and a source/config snapshot.
+Original images must still be retained separately.
+
+The [final Yannic setup](docs/experiments_yannic_setup.md) fixes two patient folds,
+five independent members per modality/fold and separate ResNet18 fine-tuning, with
+Hydra presets `yannic_2fold_ensemble` and `yannic_2fold_ensemble_image_only`.

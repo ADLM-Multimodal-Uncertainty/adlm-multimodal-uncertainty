@@ -1,0 +1,27 @@
+# @package _global_
+defaults:
+  - override /split: patient_kfold
+  - override /ensemble: deep
+
+name: yannic_2fold_image_metadata
+split:
+  n_folds: 2
+  seed: 42
+  val_size: 0.2
+ensemble:
+  seeds: [0, 1, 2, 3, 4]
+model:
+  image_encoder:
+    pretrained: true
+    freeze: false
+train:
+  epochs: 30
+  batch_size: 32
+  weighted_loss: true
+  monitor: val_macro_f1
+  optimizer:
+    lr: 1.0e-4
+hydra:
+  sweeper:
+    params:
+      fold: range(0,${split.n_folds})

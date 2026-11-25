@@ -106,3 +106,22 @@ def test_default_patient_folds_and_backbone_training():
     assert cfg.split.n_folds == 2
     assert cfg.model.image_encoder.freeze is False
     assert cfg.model.image_encoder.pretrained is True
+
+
+def test_yannic_ensemble_protocol_and_matching_image_initialization():
+    from src.train import seed_everything
+
+    multimodal = _compose(['experiment=yannic_2fold_ensemble', *OFFLINE])
+    image_only = _compose(['experiment=yannic_2fold_ensemble_image_only', *OFFLINE])
+    assert multimodal.split.n_folds == image_only.split.n_folds == 2
+    assert list(multimodal.ensemble.seeds) == list(image_only.ensemble.seeds) == [0, 1, 2, 3, 4]
+    assert multimodal.train == image_only.train
+    seed_everything(3)
+    first = build_model(multimodal.model, 6, 20)
+    seed_everything(3)
+    second = build_model(image_only.model, 6, 20)
+    assert first.uses_metadata and not second.uses_metadata
+    for key, value in first.image_encoder.state_dict().items():
+        assert torch.equal(value, second.image_encoder.state_dict()[key])
+    assert all(p.requires_grad for p in first.image_encoder.parameters())
+    assert all(p.requires_grad for p in second.image_encoder.parameters())

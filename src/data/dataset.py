@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import joblib
 import numpy as np
 import pandas as pd
 import torch
@@ -83,18 +84,31 @@ class FoldData:
     val: SkinLesionDataset
     test: SkinLesionDataset
     n_meta_features: int
+    preprocessor: object = None
 
 
-def build_fold(cfg: DictConfig, split: Split, fold: int) -> FoldData:
+def build_fold(
+    cfg: DictConfig, split: Split, fold: int, artifacts_dir: Path | None = None,
+) -> FoldData:
     """Partition with `split`, fit the metadata preprocessor on the training rows only, and
-    build the three datasets. Deterministic, so evaluation can rebuild it from the config."""
-    parts = split.partition(load_metadata(cfg.metadata_csv), fold)
-    if cfg.subset:
-        parts = {name: part.head(int(cfg.subset)) for name, part in parts.items()}
+    build the three datasets. Evaluation prefers persisted rows and fitted preprocessing;
+    older runs fall back to rebuilding from the original metadata and configuration."""
+    saved = artifacts_dir is not None and (artifacts_dir / "split_metadata.csv").exists()
+    if saved:
+        rows = load_metadata(artifacts_dir / "split_metadata.csv")
+        parts = {name: rows[rows.partition == name].drop(columns="partition")
+                 for name in ("train", "val", "test")}
+    else:
+        parts = split.partition(load_metadata(cfg.metadata_csv), fold)
+        if cfg.subset:
+            parts = {name: part.head(int(cfg.subset)) for name, part in parts.items()}
 
     numeric, categorical = list(cfg.numeric_features), list(cfg.categorical_features)
-    preprocessor = make_preprocessor(numeric, categorical)
-    preprocessor.fit(clean_features(parts["train"], numeric, categorical))
+    if saved:
+        preprocessor = joblib.load(artifacts_dir / "metadata_preprocessor.joblib")
+    else:
+        preprocessor = make_preprocessor(numeric, categorical)
+        preprocessor.fit(clean_features(parts["train"], numeric, categorical))
     features = {
         name: preprocessor.transform(clean_features(part, numeric, categorical))
         for name, part in parts.items()
@@ -107,4 +121,5 @@ def build_fold(cfg: DictConfig, split: Split, fold: int) -> FoldData:
         )
         for name in parts
     }
-    return FoldData(**datasets, n_meta_features=features["train"].shape[1])
+    return FoldData(**datasets, n_meta_features=features["train"].shape[1],
+                    preprocessor=preprocessor)
