@@ -17,9 +17,13 @@ set -eo pipefail
 ml python/uv
 set -u
 
-export UV_CACHE_DIR="${UV_CACHE_DIR:-/meta/users/$USER/.cache/uv}"
-export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/meta/users/$USER/.cache}"
-export MPLCONFIGDIR="${MPLCONFIGDIR:-/meta/users/$USER/.cache/matplotlib}"
+CACHE_BASE="/meta/users/$USER/.cache"
+if [[ ! -d "$CACHE_BASE" || ! -w "$CACHE_BASE" ]]; then
+    CACHE_BASE="/vol/miltank/users/$USER/.cache"
+fi
+export UV_CACHE_DIR="${UV_CACHE_DIR:-$CACHE_BASE/uv}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$CACHE_BASE}"
+export MPLCONFIGDIR="${MPLCONFIGDIR:-$CACHE_BASE/matplotlib}"
 export TORCH_HOME="${TORCH_HOME:-/vol/miltank/users/$USER/checkpoints/torch}"
 export HF_HOME="${HF_HOME:-/vol/miltank/users/$USER/checkpoints/huggingface}"
 export OUTPUT_ROOT="${OUTPUT_ROOT:-/vol/miltank/users/$USER/outputs}"
