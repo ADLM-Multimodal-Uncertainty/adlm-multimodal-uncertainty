@@ -23,11 +23,12 @@ set -euo pipefail
 ml python/uv
 
 export UV_CACHE_DIR="${UV_CACHE_DIR:-/meta/users/$USER/.cache/uv}"
-export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/meta/users/$USER/cache}"
-export TORCH_HOME="${TORCH_HOME:-/meta/users/$USER/cache/torch}"
-export MPLCONFIGDIR="${MPLCONFIGDIR:-/meta/users/$USER/cache/matplotlib}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/meta/users/$USER/.cache}"
+export MPLCONFIGDIR="${MPLCONFIGDIR:-/meta/users/$USER/.cache/matplotlib}"
+export TORCH_HOME="${TORCH_HOME:-/vol/miltank/users/$USER/checkpoints/torch}"
+export HF_HOME="${HF_HOME:-/vol/miltank/users/$USER/checkpoints/huggingface}"
 export OUTPUT_ROOT="${OUTPUT_ROOT:-/vol/miltank/users/$USER/outputs}"
-mkdir -p "$UV_CACHE_DIR" "$XDG_CACHE_HOME" "$TORCH_HOME" "$MPLCONFIGDIR" "$OUTPUT_ROOT/slurm"
+mkdir -p "$UV_CACHE_DIR" "$XDG_CACHE_HOME" "$MPLCONFIGDIR" "$TORCH_HOME" "$HF_HOME" "$OUTPUT_ROOT/slurm"
 
 cd "${REPO_DIR:-/vol/miltank/users/$USER/code/adlm-multimodal-uncertainty}"
 
@@ -52,7 +53,7 @@ RESOLVED_DATA="$(resolve_data_dir)" || {
 
 FOLD="${SLURM_ARRAY_TASK_ID}"
 echo "commit $(git rev-parse --short HEAD) fold=${FOLD} data=${RESOLVED_DATA} output_root=${OUTPUT_ROOT}"
-uv run python -m src.train \
+uv run --no-sync python -m src.train \
     fold="${FOLD}" \
     output_root="$OUTPUT_ROOT" \
     data.root="$RESOLVED_DATA" \

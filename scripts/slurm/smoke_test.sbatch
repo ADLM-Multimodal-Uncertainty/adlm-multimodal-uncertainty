@@ -17,18 +17,19 @@ set -euo pipefail
 ml python/uv
 
 export UV_CACHE_DIR="${UV_CACHE_DIR:-/meta/users/$USER/.cache/uv}"
-export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/meta/users/$USER/cache}"
-export TORCH_HOME="${TORCH_HOME:-/meta/users/$USER/cache/torch}"
-export MPLCONFIGDIR="${MPLCONFIGDIR:-/meta/users/$USER/cache/matplotlib}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/meta/users/$USER/.cache}"
+export MPLCONFIGDIR="${MPLCONFIGDIR:-/meta/users/$USER/.cache/matplotlib}"
+export TORCH_HOME="${TORCH_HOME:-/vol/miltank/users/$USER/checkpoints/torch}"
+export HF_HOME="${HF_HOME:-/vol/miltank/users/$USER/checkpoints/huggingface}"
 export OUTPUT_ROOT="${OUTPUT_ROOT:-/vol/miltank/users/$USER/outputs}"
-mkdir -p "$UV_CACHE_DIR" "$XDG_CACHE_HOME" "$TORCH_HOME" "$MPLCONFIGDIR" "$OUTPUT_ROOT/slurm"
+mkdir -p "$UV_CACHE_DIR" "$XDG_CACHE_HOME" "$MPLCONFIGDIR" "$TORCH_HOME" "$HF_HOME" "$OUTPUT_ROOT/slurm"
 
 cd "${REPO_DIR:-/vol/miltank/users/$USER/code/adlm-multimodal-uncertainty}"
 echo "commit $(git rev-parse --short HEAD) branch $(git branch --show-current)"
 echo "caches: UV=$UV_CACHE_DIR TORCH=$TORCH_HOME MPL=$MPLCONFIGDIR"
 nvidia-smi
-uv run python -c "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
-uv run pytest -q
+uv run --no-sync python -c "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
+uv run --no-sync pytest -q
 
 resolve_data_dir() {
     for candidate in \
@@ -47,7 +48,7 @@ resolve_data_dir() {
 
 if RESOLVED_DATA="$(resolve_data_dir)"; then
     echo "running 1-epoch CUDA smoke training with data.root=$RESOLVED_DATA"
-    uv run python -m src.train \
+    uv run --no-sync python -m src.train \
         experiment=eu_baseline_r18_multimodal \
         '~ensemble' \
         name=cluster_smoke \

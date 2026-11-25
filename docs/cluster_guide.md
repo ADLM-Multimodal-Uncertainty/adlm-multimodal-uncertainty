@@ -71,9 +71,10 @@ export DATA_ROOT=/vol/miltank/projects/practical_wise2627/<group>/data
 # export DATA_DIR=/vol/miltank/users/$USER/data/pad_ufes_20
 export OUTPUT_ROOT=/vol/miltank/users/$USER/outputs
 export UV_CACHE_DIR=/meta/users/$USER/.cache/uv
-export XDG_CACHE_HOME=/meta/users/$USER/cache
-export TORCH_HOME=/meta/users/$USER/cache/torch
-export MPLCONFIGDIR=/meta/users/$USER/cache/matplotlib
+export XDG_CACHE_HOME=/meta/users/$USER/.cache
+export MPLCONFIGDIR=/meta/users/$USER/.cache/matplotlib
+export TORCH_HOME=/vol/miltank/users/$USER/checkpoints/torch
+export HF_HOME=/vol/miltank/users/$USER/checkpoints/huggingface
 export WANDB_DIR=/vol/miltank/users/$USER/outputs/wandb
 export WANDB_API_KEY=<your key>      # or `wandb login` once
 ```
