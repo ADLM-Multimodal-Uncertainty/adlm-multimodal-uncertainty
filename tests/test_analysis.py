@@ -48,12 +48,14 @@ def _write_artifact(
     fold: int = 0,
     arch: str = "resnet18",
     train_fraction: float = 1.0,
+    epochs: int = 10,
     seeds: tuple[int, ...] = (0, 1, 2),
     labels: list[int] | None = None,
     img_ids: list[str] | None = None,
     patient_ids: list[str] | None = None,
     metadata_csv: Path | None = None,
     write_histories: bool = True,
+    logit_scale: float | None = None,
 ) -> None:
     path.mkdir(parents=True, exist_ok=True)
     labels_arr = np.array([0, 1, 0, 1]) if labels is None else np.asarray(labels)
@@ -77,7 +79,7 @@ def _write_artifact(
                 "train_subset_seed": 42,
                 "metadata_csv": str(metadata_csv) if metadata_csv else None,
             },
-            "train": {"epochs": 2},
+            "train": {"epochs": epochs},
             "model": {
                 "image_encoder": {"arch": arch, "freeze": False},
                 "tabular_encoder": tabular_encoder,
@@ -86,15 +88,28 @@ def _write_artifact(
         }
     )
     OmegaConf.save(config, path / "config.yaml")
-    np.savez_compressed(
-        path / "test_member_predictions.npz",
-        probabilities=probabilities,
-        labels=labels_arr,
-        img_ids=img_arr,
-        patient_ids=pat_arr,
-        classes=np.array(["A", "MEL"]),
-        seeds=np.array(seeds),
-    )
+    test_payload: dict[str, np.ndarray] = {
+        "probabilities": probabilities,
+        "labels": labels_arr,
+        "img_ids": img_arr,
+        "patient_ids": pat_arr,
+        "classes": np.array(["A", "MEL"]),
+        "seeds": np.array(seeds),
+    }
+    if logit_scale is not None:
+        logits = np.log(np.clip(probabilities, 1e-6, 1.0)) * logit_scale
+        test_payload["logits"] = logits
+        np.savez_compressed(
+            path / "val_member_predictions.npz",
+            logits=logits,
+            probabilities=probabilities,
+            labels=labels_arr,
+            img_ids=img_arr,
+            patient_ids=pat_arr,
+            classes=np.array(["A", "MEL"]),
+            seeds=np.array(seeds),
+        )
+    np.savez_compressed(path / "test_member_predictions.npz", **test_payload)
     if write_histories:
         for idx, seed in enumerate(seeds):
             _write_history(path / "members" / f"seed_{seed}", loss_offset=0.05 * idx)
@@ -302,3 +317,65 @@ def test_patient_bootstrap_is_deterministic():
     assert bootstrap_mean_ci(values, n_samples=100, seed=4) == bootstrap_mean_ci(
         values, n_samples=100, seed=4
     )
+
+
+def test_temperature_scaling_and_step_matched_positive_control_regimes(tmp_path):
+    runs_root = tmp_path / "runs"
+    meta_path = tmp_path / "metadata.csv"
+    _write_metadata(meta_path, folds=(0, 1))
+
+    setups = [
+        ("eu_baseline_r18", 1.0, 10, 0.15, 0.05, 1.5),
+        ("eu_size_r18_f050", 0.5, 10, 0.12, 0.12, 1.2),
+        ("eu_size_r18_f025", 0.25, 10, 0.08, 0.09, 1.0),
+        ("eu_size_r18_step_f050", 0.5, 20, 0.25, 0.12, 1.5),
+        ("eu_size_r18_step_f025", 0.25, 40, 0.40, 0.22, 1.5),
+    ]
+    for prefix, frac, epochs, img_spread, mm_spread, scale in setups:
+        for fold in (0, 1):
+            _write_artifact(
+                runs_root / f"{prefix}_image_only-patient_kfold-f{fold}-s42",
+                _make_probs(img_spread),
+                None,
+                name=f"{prefix}_image_only",
+                fold=fold,
+                train_fraction=frac,
+                epochs=epochs,
+                metadata_csv=meta_path,
+                logit_scale=scale,
+            )
+            _write_artifact(
+                runs_root / f"{prefix}_multimodal-patient_kfold-f{fold}-s42",
+                _make_probs(mm_spread),
+                {"hidden_dims": [64]},
+                name=f"{prefix}_multimodal",
+                fold=fold,
+                train_fraction=frac,
+                epochs=epochs,
+                metadata_csv=meta_path,
+                logit_scale=scale,
+            )
+
+    output = PairedAnalysis(
+        runs_root=str(runs_root),
+        output_dir=str(tmp_path / "analysis"),
+        bootstrap_samples=100,
+        seed=42,
+    ).run()
+
+    comp = pd.read_csv(output / "condition_comparison.csv")
+    assert set(comp["budget_regime"]) == {"full", "fixed_epochs", "step_matched"}
+    assert comp["mean_ts_deu"].notna().all()
+
+    pos = pd.read_csv(output / "positive_control_summary.csv")
+    assert set(pos["budget_regime"]) == {"fixed_epochs", "step_matched"}
+    step_rows = pos[pos["budget_regime"] == "step_matched"]
+    fixed_rows = pos[pos["budget_regime"] == "fixed_epochs"]
+    assert (step_rows["status"] == "PASS").all()
+    assert (fixed_rows["status"] == "UNCLEAR_EXPAND_FOLDS").all()
+    assert step_rows["ts_eu_025"].notna().all()
+
+    md_text = (output / "summary_tables.md").read_text()
+    assert "## 1b. Post-Hoc Validation Temperature-Scaled Epistemic Uncertainty" in md_text
+    assert "fixed_epochs" in md_text and "step_matched" in md_text
+    assert (output / "train_fraction.png").stat().st_size > 0

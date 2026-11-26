@@ -198,9 +198,29 @@ sbatch --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
 ```
 
 Run the CPU-only analysis again (`sbatch scripts/slurm/analyze.sbatch`) and check
-`positive_control_summary.csv` and `summary_tables.md`. If EU does not decrease monotonically
-or the 25%-vs-100% patient bootstrap CI includes 0, expand folds 2-4 with `--array=2-4%2` using
-the exact same `name=...` overrides, then run `sbatch scripts/slurm/analyze.sbatch` one final time.
+`positive_control_summary.csv` and `summary_tables.md` (which report both raw MI EU and
+post-hoc validation temperature-scaled MI EU).
+
+Because fixed-epoch subsets (`epochs=10`) take 2-4x fewer gradient updates than the 100% baseline
+and can under-diverge pretrained ensemble members, you can also run a **step-matched** positive
+control (matching gradient updates via `train.epochs=40` at 25% and `train.epochs=20` at 50%);
+`src/analysis.py` automatically separates `fixed_epochs` and `step_matched` regimes against the
+shared 100% anchor:
+
+```bash
+sbatch --partition=universe --qos=master-queuesave --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
+  experiment=eu_baseline_r18_image_only data.train_fraction=0.25 train.epochs=40 name=eu_size_r18_step_f025_image_only
+sbatch --partition=universe --qos=master-queuesave --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
+  experiment=eu_baseline_r18_multimodal data.train_fraction=0.25 train.epochs=40 name=eu_size_r18_step_f025_multimodal
+sbatch --partition=universe --qos=master-queuesave --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
+  experiment=eu_baseline_r18_image_only data.train_fraction=0.5 train.epochs=20 name=eu_size_r18_step_f050_image_only
+sbatch --partition=universe --qos=master-queuesave --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
+  experiment=eu_baseline_r18_multimodal data.train_fraction=0.5 train.epochs=20 name=eu_size_r18_step_f050_multimodal
+```
+
+If EU does not decrease monotonically or the 25%-vs-100% patient bootstrap CI includes 0 (and is
+not clearly inverted), expand folds 2-4 with `--array=2-4%2` using the exact same `name=...`
+overrides, then run `sbatch scripts/slurm/analyze.sbatch` one final time.
 
 ### Pull lightweight analysis tables and plots back to your laptop
 

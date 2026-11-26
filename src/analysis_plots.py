@@ -641,21 +641,74 @@ def plot_cross_setup_learning_curves(all_curves: pd.DataFrame, path: Path) -> No
     fig.savefig(path, dpi=150)
 
 
-def plot_train_fraction(comparison: pd.DataFrame, path: Path) -> None:
-    fig = Figure(figsize=(16, 8.6), layout="constrained")
-    axes = fig.subplots(2, 3)
-
+def _train_fraction_series(comparison: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
+    """Build per-(architecture, budget_regime) curves sharing the 100% anchor."""
+    series: list[tuple[str, pd.DataFrame]] = []
+    has_regime = "budget_regime" in comparison.columns
     for architecture, group in comparison.groupby("architecture"):
-        group = group.sort_values("train_fraction")
+        if not has_regime:
+            series.append((str(architecture), group.sort_values("train_fraction")))
+            continue
+        full = group[np.isclose(group["train_fraction"], 1.0)]
+        subsets = group[~np.isclose(group["train_fraction"], 1.0)]
+        if subsets.empty:
+            series.append((str(architecture), group.sort_values("train_fraction")))
+            continue
+        regimes = list(dict.fromkeys(subsets["budget_regime"]))
+        for regime in regimes:
+            sub = pd.concat(
+                [subsets[subsets["budget_regime"] == regime], full], ignore_index=True
+            ).sort_values("train_fraction")
+            label = (
+                f"{architecture} ({regime})"
+                if len(regimes) > 1
+                else str(architecture)
+            )
+            series.append((label, sub))
+    return series
+
+
+def plot_train_fraction(comparison: pd.DataFrame, path: Path) -> None:
+    has_ts = (
+        "mean_image_ts_epistemic" in comparison.columns
+        and comparison["mean_image_ts_epistemic"].notna().any()
+    )
+    series = _train_fraction_series(comparison)
+
+    if has_ts:
+        fig = Figure(figsize=(20, 8.8), layout="constrained")
+        axes = fig.subplots(2, 4)
+        ax_mi, ax_ts_mi, ax_var, ax_au = axes[0]
+        ax_deu, ax_ts_deu, ax_bal, ax_f1 = axes[1]
+    else:
+        fig = Figure(figsize=(16, 8.6), layout="constrained")
+        axes = fig.subplots(2, 3)
+        ax_mi, ax_var, ax_au = axes[0]
+        ax_deu, ax_bal, ax_f1 = axes[1]
+        ax_ts_mi = None
+        ax_ts_deu = None
+
+    for label, group in series:
         frac = group["train_fraction"]
         for arm in ("image", "multimodal"):
-            tag = f"{architecture} {arm}"
-            axes[0, 0].plot(frac, group[f"mean_{arm}_epistemic"], marker="o", label=tag)
-            axes[0, 1].plot(frac, group[f"mean_{arm}_variance_epistemic"], marker="o", label=tag)
-            axes[0, 2].plot(frac, group[f"mean_{arm}_aleatoric"], marker="o", label=tag)
-            axes[1, 1].plot(frac, group[f"{arm}_balanced_accuracy"], marker="o", label=tag)
-            axes[1, 2].plot(frac, group[f"{arm}_macro_f1"], marker="o", label=tag)
-        axes[1, 0].errorbar(
+            tag = f"{label} {arm}"
+            ax_mi.plot(frac, group[f"mean_{arm}_epistemic"], marker="o", label=tag)
+            ax_var.plot(
+                frac, group[f"mean_{arm}_variance_epistemic"], marker="o", label=tag
+            )
+            ax_au.plot(frac, group[f"mean_{arm}_aleatoric"], marker="o", label=tag)
+            ax_bal.plot(frac, group[f"{arm}_balanced_accuracy"], marker="o", label=tag)
+            ax_f1.plot(frac, group[f"{arm}_macro_f1"], marker="o", label=tag)
+            if ax_ts_mi is not None and f"mean_{arm}_ts_epistemic" in group:
+                ts_sub = group.dropna(subset=[f"mean_{arm}_ts_epistemic"])
+                if not ts_sub.empty:
+                    ax_ts_mi.plot(
+                        ts_sub["train_fraction"],
+                        ts_sub[f"mean_{arm}_ts_epistemic"],
+                        marker="o",
+                        label=tag,
+                    )
+        ax_deu.errorbar(
             frac,
             group["mean_deu"],
             yerr=[
@@ -664,20 +717,38 @@ def plot_train_fraction(comparison: pd.DataFrame, path: Path) -> None:
             ],
             marker="o",
             capsize=4,
-            label=str(architecture),
+            label=label,
         )
+        if ax_ts_deu is not None and "mean_ts_deu" in group:
+            ts_sub = group.dropna(subset=["mean_ts_deu"])
+            if not ts_sub.empty:
+                ax_ts_deu.errorbar(
+                    ts_sub["train_fraction"],
+                    ts_sub["mean_ts_deu"],
+                    yerr=[
+                        np.maximum(ts_sub["mean_ts_deu"] - ts_sub["ts_deu_ci_low"], 0),
+                        np.maximum(ts_sub["ts_deu_ci_high"] - ts_sub["mean_ts_deu"], 0),
+                    ],
+                    marker="o",
+                    capsize=4,
+                    label=label,
+                )
 
-    axes[0, 0].set(title="MI Epistemic Uncertainty", ylabel="nats")
-    axes[0, 1].set(title="Variance Epistemic Uncertainty", ylabel="sum variance")
-    axes[0, 2].set(title="Aleatoric Uncertainty", ylabel="nats")
-    axes[1, 0].axhline(0, color="black", linestyle=":")
-    axes[1, 0].set(title="Paired dEU (95% CI)", ylabel="nats")
-    axes[1, 1].set(title="Balanced Accuracy", ylabel="score", ylim=(0, 1))
-    axes[1, 2].set(title="Macro-F1", ylabel="score", ylim=(0, 1))
+    ax_mi.set(title="Raw MI Epistemic Uncertainty", ylabel="nats")
+    ax_var.set(title="Variance Epistemic Uncertainty", ylabel="sum variance")
+    ax_au.set(title="Aleatoric Uncertainty", ylabel="nats")
+    ax_deu.axhline(0, color="black", linestyle=":")
+    ax_deu.set(title="Raw Paired dEU (95% CI)", ylabel="nats")
+    ax_bal.set(title="Balanced Accuracy", ylabel="score", ylim=(0, 1))
+    ax_f1.set(title="Macro-F1", ylabel="score", ylim=(0, 1))
+    if ax_ts_mi is not None and ax_ts_deu is not None:
+        ax_ts_mi.set(title="Temp-Scaled MI Epistemic Uncertainty", ylabel="nats")
+        ax_ts_deu.axhline(0, color="black", linestyle=":")
+        ax_ts_deu.set(title="Temp-Scaled Paired dEU (95% CI)", ylabel="nats")
 
     for axis in axes.ravel():
         axis.set_xlabel("training-patient fraction")
         axis.grid(alpha=0.25)
-        axis.legend(fontsize=8)
+        axis.legend(fontsize=7)
     fig.suptitle("Positive control: epistemic uncertainty and classification vs training-set size")
     fig.savefig(path, dpi=150)

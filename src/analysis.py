@@ -12,6 +12,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from omegaconf import DictConfig, OmegaConf
+from scipy.optimize import minimize_scalar
+from scipy.special import log_softmax, softmax
 from scipy.stats import spearmanr, wilcoxon
 from sklearn.metrics import roc_auc_score
 
@@ -74,6 +76,9 @@ class EnsembleArtifact:
     patient_ids: np.ndarray
     classes: np.ndarray
     seeds: np.ndarray
+    logits: np.ndarray | None = None
+    val_logits: np.ndarray | None = None
+    val_labels: np.ndarray | None = None
 
 
 def load_ensemble_artifact(run_dir: str | Path) -> EnsembleArtifact:
@@ -87,6 +92,15 @@ def load_ensemble_artifact(run_dir: str | Path) -> EnsembleArtifact:
     probabilities = arrays["probabilities"]
     if probabilities.ndim != 3:
         raise ValueError(f"{path} probabilities must have shape (member, image, class)")
+    logits = arrays.get("logits")
+    val_logits: np.ndarray | None = None
+    val_labels: np.ndarray | None = None
+    val_path = path / "val_member_predictions.npz"
+    if val_path.exists():
+        with np.load(val_path, allow_pickle=False) as val_saved:
+            if "logits" in val_saved.files and "labels" in val_saved.files:
+                val_logits = val_saved["logits"].copy()
+                val_labels = val_saved["labels"].copy()
     return EnsembleArtifact(
         run_dir=path,
         cfg=OmegaConf.load(path / "config.yaml"),
@@ -96,7 +110,52 @@ def load_ensemble_artifact(run_dir: str | Path) -> EnsembleArtifact:
         patient_ids=arrays["patient_ids"].astype(str),
         classes=arrays["classes"].astype(str),
         seeds=arrays["seeds"],
+        logits=logits,
+        val_logits=val_logits,
+        val_labels=val_labels,
     )
+
+
+def fit_temperature(logits: np.ndarray, labels: np.ndarray) -> float:
+    """Fit scalar temperature T > 0 minimizing validation NLL (no test leakage)."""
+    logits_arr = np.asarray(logits, dtype=float)
+    labels_arr = np.asarray(labels, dtype=int)
+    idx = np.arange(len(labels_arr))
+
+    def _nll(log_t: float) -> float:
+        temp = float(np.exp(log_t))
+        ls = log_softmax(logits_arr / temp, axis=-1)
+        return float(-ls[idx, labels_arr].mean())
+
+    result = minimize_scalar(_nll, bounds=(-2.0, 3.0), method="bounded")
+    return float(np.exp(result.x))
+
+
+def _temperature_scaled_probabilities(
+    artifact: EnsembleArtifact,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    if (
+        artifact.logits is None
+        or artifact.val_logits is None
+        or artifact.val_labels is None
+    ):
+        return None
+    if (
+        artifact.logits.shape != artifact.probabilities.shape
+        or artifact.val_logits.shape[0] != artifact.probabilities.shape[0]
+    ):
+        return None
+    temps = np.array(
+        [
+            fit_temperature(artifact.val_logits[k], artifact.val_labels)
+            for k in range(artifact.logits.shape[0])
+        ],
+        dtype=float,
+    )
+    scaled = np.stack(
+        [softmax(artifact.logits[k] / temps[k], axis=-1) for k in range(len(temps))]
+    )
+    return scaled, temps
 
 
 def bootstrap_mean_ci(
@@ -242,7 +301,7 @@ def _validate_arm(artifacts: list[EnsembleArtifact], arm: str) -> dict[int, Ense
 
 def _pair_fold(
     image: EnsembleArtifact, multimodal: EnsembleArtifact
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     for path in (
         "fold",
         "split",
@@ -274,13 +333,13 @@ def _pair_fold(
         raise ValueError("paired runs disagree on labels")
     if not np.array_equal(image.patient_ids, multimodal.patient_ids[order]):
         raise ValueError("paired runs disagree on patient IDs")
-    return image.probabilities, multimodal.probabilities[:, order]
+    return image.probabilities, multimodal.probabilities[:, order], order
 
 
 def _fold_frame(
     image: EnsembleArtifact, multimodal: EnsembleArtifact
 ) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
-    image_probs, multimodal_probs = _pair_fold(image, multimodal)
+    image_probs, multimodal_probs, order = _pair_fold(image, multimodal)
     image_mean = image_probs.mean(axis=0)
     multimodal_mean = multimodal_probs.mean(axis=0)
     image_total, image_aleatoric, image_epistemic = uncertainty(image_probs)
@@ -321,6 +380,30 @@ def _fold_frame(
             ),
         }
     )
+    image_ts = _temperature_scaled_probabilities(image)
+    multimodal_ts = _temperature_scaled_probabilities(multimodal)
+    if image_ts is not None and multimodal_ts is not None:
+        img_ts_probs, img_temps = image_ts
+        mm_ts_probs_raw, mm_temps = multimodal_ts
+        mm_ts_probs = mm_ts_probs_raw[:, order]
+        img_ts_tu, img_ts_au, img_ts_eu = uncertainty(img_ts_probs)
+        mm_ts_tu, mm_ts_au, mm_ts_eu = uncertainty(mm_ts_probs)
+        idx = np.arange(len(image.labels))
+        img_ts_mean = img_ts_probs.mean(axis=0)
+        mm_ts_mean = mm_ts_probs.mean(axis=0)
+        frame["image_ts_total"] = img_ts_tu
+        frame["multimodal_ts_total"] = mm_ts_tu
+        frame["image_ts_aleatoric"] = img_ts_au
+        frame["multimodal_ts_aleatoric"] = mm_ts_au
+        frame["image_ts_epistemic"] = img_ts_eu
+        frame["multimodal_ts_epistemic"] = mm_ts_eu
+        frame["dts_epistemic"] = img_ts_eu - mm_ts_eu
+        frame["image_ts_nll"] = -np.log(np.clip(img_ts_mean[idx, image.labels], 1e-12, 1.0))
+        frame["multimodal_ts_nll"] = -np.log(
+            np.clip(mm_ts_mean[idx, image.labels], 1e-12, 1.0)
+        )
+        frame["image_mean_temp"] = float(img_temps.mean())
+        frame["multimodal_mean_temp"] = float(mm_temps.mean())
     for index, name in enumerate(classes):
         frame[f"image_p_{name}"] = image_mean[:, index]
         frame[f"multimodal_p_{name}"] = multimodal_mean[:, index]
@@ -729,6 +812,31 @@ def _eu_measures_agreement(condition_frames: dict[str, pd.DataFrame]) -> pd.Data
     return pd.DataFrame(rows)
 
 
+def _attach_budget_regime(comparison: pd.DataFrame) -> pd.DataFrame:
+    """Tag each condition as full, fixed_epochs, step_matched, or custom epochs."""
+    out = comparison.copy()
+    regimes: list[str] = []
+    anchor_epochs: dict[str, int] = {}
+    for arch, group in out.groupby("architecture"):
+        full = group[np.isclose(group["train_fraction"], 1.0)]
+        if not full.empty and "epochs" in full.columns:
+            anchor_epochs[str(arch)] = int(full.iloc[0]["epochs"])
+    for _, row in out.iterrows():
+        frac = float(row["train_fraction"])
+        epochs = int(row.get("epochs", 0) or 0)
+        base_epochs = anchor_epochs.get(str(row["architecture"]), 0)
+        if np.isclose(frac, 1.0):
+            regimes.append("full")
+        elif base_epochs > 0 and epochs == base_epochs:
+            regimes.append("fixed_epochs")
+        elif base_epochs > 0 and abs(epochs * frac - base_epochs) <= 1.0:
+            regimes.append("step_matched")
+        else:
+            regimes.append(f"epochs_{epochs}" if epochs > 0 else "subset")
+    out["budget_regime"] = regimes
+    return out
+
+
 def _positive_control_summary(
     comparison: pd.DataFrame,
     condition_frames: dict[str, pd.DataFrame],
@@ -736,63 +844,84 @@ def _positive_control_summary(
     seed: int,
 ) -> pd.DataFrame | None:
     rows = []
-    for arch, group in comparison.groupby("architecture"):
-        if group["train_fraction"].nunique() < 2:
+    tagged = (
+        comparison
+        if "budget_regime" in comparison.columns
+        else _attach_budget_regime(comparison)
+    )
+    for arch, group in tagged.groupby("architecture"):
+        full_rows = group[np.isclose(group["train_fraction"], 1.0)]
+        if full_rows.empty:
             continue
-        by_frac = {
-            round(float(row["train_fraction"]), 2): row["condition"]
-            for _, row in group.iterrows()
-        }
-        if 0.25 not in by_frac or 1.0 not in by_frac:
+        high_cond = str(full_rows.iloc[0]["condition"])
+        high_frame = condition_frames[high_cond]
+        subset_rows = group[~np.isclose(group["train_fraction"], 1.0)]
+        if subset_rows.empty:
             continue
-        low_frame = condition_frames[by_frac[0.25]]
-        high_frame = condition_frames[by_frac[1.0]]
-        shared_folds = sorted(set(low_frame["fold"]).intersection(high_frame["fold"]))
-        if not shared_folds:
-            continue
-        low_pat = (
-            low_frame[low_frame["fold"].isin(shared_folds)]
-            .groupby("patient_id")[["image_epistemic", "multimodal_epistemic"]]
-            .mean()
-        )
-        high_pat = (
-            high_frame[high_frame["fold"].isin(shared_folds)]
-            .groupby("patient_id")[["image_epistemic", "multimodal_epistemic"]]
-            .mean()
-        )
-        common_patients = low_pat.index.intersection(high_pat.index)
-        if len(common_patients) == 0:
-            continue
-        mid_pat = None
-        if 0.5 in by_frac:
-            mid_frame = condition_frames[by_frac[0.5]]
-            mid_pat = (
-                mid_frame[mid_frame["fold"].isin(shared_folds)]
-                .groupby("patient_id")[["image_epistemic", "multimodal_epistemic"]]
+        for regime, reg_group in subset_rows.groupby("budget_regime"):
+            by_frac = {
+                round(float(row["train_fraction"]), 2): str(row["condition"])
+                for _, row in reg_group.iterrows()
+            }
+            if 0.25 not in by_frac:
+                continue
+            low_frame = condition_frames[by_frac[0.25]]
+            shared_folds = sorted(
+                set(low_frame["fold"]).intersection(high_frame["fold"])
+            )
+            if not shared_folds:
+                continue
+            has_ts = (
+                "image_ts_epistemic" in low_frame.columns
+                and "image_ts_epistemic" in high_frame.columns
+            )
+            cols = ["image_epistemic", "multimodal_epistemic"]
+            if has_ts:
+                cols += ["image_ts_epistemic", "multimodal_ts_epistemic"]
+            low_pat = (
+                low_frame[low_frame["fold"].isin(shared_folds)]
+                .groupby("patient_id")[cols]
                 .mean()
-                .reindex(common_patients)
             )
-        for arm in ("image", "multimodal"):
-            col = f"{arm}_epistemic"
-            e25 = low_pat.loc[common_patients, col].to_numpy()
-            e100 = high_pat.loc[common_patients, col].to_numpy()
-            e50_mean = float(mid_pat[col].mean()) if mid_pat is not None else None
-            delta = e25 - e100  # positive => EU dropped with more training data
-            ci_low, ci_high = bootstrap_mean_ci(delta, bootstrap_samples, seed)
-            monotonic = (
-                (float(e25.mean()) > e50_mean > float(e100.mean()))
-                if e50_mean is not None
-                else float(e25.mean()) > float(e100.mean())
+            high_pat = (
+                high_frame[high_frame["fold"].isin(shared_folds)]
+                .groupby("patient_id")[cols]
+                .mean()
             )
-            passed = bool(monotonic and ci_low > 0)
-            status = (
-                "PASS"
-                if passed
-                else ("FAIL" if len(shared_folds) >= 5 else "UNCLEAR_EXPAND_FOLDS")
-            )
-            rows.append(
-                {
+            common_patients = low_pat.index.intersection(high_pat.index)
+            if len(common_patients) == 0:
+                continue
+            mid_pat = None
+            if 0.5 in by_frac:
+                mid_frame = condition_frames[by_frac[0.5]]
+                mid_cols = [c for c in cols if c in mid_frame.columns]
+                mid_pat = (
+                    mid_frame[mid_frame["fold"].isin(shared_folds)]
+                    .groupby("patient_id")[mid_cols]
+                    .mean()
+                    .reindex(common_patients)
+                )
+            for arm in ("image", "multimodal"):
+                col = f"{arm}_epistemic"
+                e25 = low_pat.loc[common_patients, col].to_numpy()
+                e100 = high_pat.loc[common_patients, col].to_numpy()
+                e50_mean = float(mid_pat[col].mean()) if mid_pat is not None else None
+                delta = e25 - e100  # positive => EU dropped with more training data
+                ci_low, ci_high = bootstrap_mean_ci(delta, bootstrap_samples, seed)
+                monotonic = (
+                    (float(e25.mean()) > e50_mean > float(e100.mean()))
+                    if e50_mean is not None
+                    else float(e25.mean()) > float(e100.mean())
+                )
+                passed = bool(monotonic and ci_low > 0)
+                status = (
+                    "PASS"
+                    if passed
+                    else ("FAIL" if len(shared_folds) >= 5 else "UNCLEAR_EXPAND_FOLDS")
+                )
+                row_entry: dict[str, Any] = {
                     "architecture": str(arch),
+                    "budget_regime": str(regime),
                     "arm": arm,
                     "shared_folds": ",".join(str(f) for f in shared_folds),
                     "n_patients": len(common_patients),
@@ -806,7 +935,45 @@ def _positive_control_summary(
                     "monotonic_decrease": monotonic,
                     "status": status,
                 }
-            )
+                if has_ts:
+                    ts_col = f"{arm}_ts_epistemic"
+                    te25 = low_pat.loc[common_patients, ts_col].to_numpy()
+                    te100 = high_pat.loc[common_patients, ts_col].to_numpy()
+                    te50_mean = (
+                        float(mid_pat[ts_col].mean())
+                        if mid_pat is not None and ts_col in mid_pat.columns
+                        else None
+                    )
+                    ts_delta = te25 - te100
+                    ts_lo, ts_hi = bootstrap_mean_ci(ts_delta, bootstrap_samples, seed)
+                    ts_mono = (
+                        (float(te25.mean()) > te50_mean > float(te100.mean()))
+                        if te50_mean is not None
+                        else float(te25.mean()) > float(te100.mean())
+                    )
+                    ts_passed = bool(ts_mono and ts_lo > 0)
+                    row_entry.update(
+                        {
+                            "ts_eu_025": float(te25.mean()),
+                            "ts_eu_050": te50_mean,
+                            "ts_eu_100": float(te100.mean()),
+                            "ts_eu_drop_025_to_100": float(ts_delta.mean()),
+                            "ts_drop_ci_low": ts_lo,
+                            "ts_drop_ci_high": ts_hi,
+                            "ts_wilcoxon_p": _paired_test(te25, te100),
+                            "ts_monotonic_decrease": ts_mono,
+                            "ts_status": (
+                                "PASS"
+                                if ts_passed
+                                else (
+                                    "FAIL"
+                                    if len(shared_folds) >= 5
+                                    else "UNCLEAR_EXPAND_FOLDS"
+                                )
+                            ),
+                        }
+                    )
+                rows.append(row_entry)
     return pd.DataFrame(rows) if rows else None
 
 
@@ -841,6 +1008,7 @@ def _write_summary_tables_md(
         "Condition",
         "Arch",
         "Frac",
+        "Epochs",
         "Folds",
         "Arm",
         "Acc",
@@ -869,6 +1037,7 @@ def _write_summary_tables_md(
                     str(r["condition"]),
                     str(r["architecture"]),
                     _fmt(r["train_fraction"], 2),
+                    str(int(r.get("epochs", 0) or 0)),
                     str(r["folds"]),
                     arm,
                     _fmt(r[f"{arm}_accuracy"], 3),
@@ -890,6 +1059,54 @@ def _write_summary_tables_md(
                 ]
             )
     sections.append("## 1. Overall Setup Comparison\n\n" + _markdown_table(headers, rows))
+
+    if (
+        "mean_ts_deu" in comparison.columns
+        and comparison["mean_ts_deu"].notna().any()
+    ):
+        ts_headers = [
+            "Condition",
+            "Frac",
+            "Epochs",
+            "Regime",
+            "T(img)",
+            "T(mm)",
+            "TS NLL(img)",
+            "TS NLL(mm)",
+            "TS EU(img)",
+            "TS EU(mm)",
+            "TS dEU [95% CI]",
+            "TS p",
+        ]
+        ts_rows: list[list[str]] = []
+        for _, r in comparison.iterrows():
+            if pd.isna(r.get("mean_ts_deu")):
+                continue
+            ts_ci = (
+                f"{_fmt(r['mean_ts_deu'])} "
+                f"[{_fmt(r['ts_deu_ci_low'])}, {_fmt(r['ts_deu_ci_high'])}]"
+            )
+            ts_rows.append(
+                [
+                    str(r["condition"]),
+                    _fmt(r["train_fraction"], 2),
+                    str(int(r.get("epochs", 0) or 0)),
+                    str(r.get("budget_regime", "n/a")),
+                    _fmt(r.get("image_mean_temp"), 2),
+                    _fmt(r.get("multimodal_mean_temp"), 2),
+                    _fmt(r.get("image_ts_nll"), 3),
+                    _fmt(r.get("multimodal_ts_nll"), 3),
+                    _fmt(r.get("mean_image_ts_epistemic"), 4),
+                    _fmt(r.get("mean_multimodal_ts_epistemic"), 4),
+                    ts_ci,
+                    _fmt(r.get("ts_wilcoxon_p"), 4),
+                ]
+            )
+        if ts_rows:
+            sections.append(
+                "## 1b. Post-Hoc Validation Temperature-Scaled Epistemic Uncertainty\n\n"
+                + _markdown_table(ts_headers, ts_rows)
+            )
 
     fold_headers = [
         "Condition",
@@ -1052,13 +1269,24 @@ def _write_summary_tables_md(
 
     if positive_control is not None and not positive_control.empty:
         for _, r in positive_control.iterrows():
+            regime = r.get("budget_regime", "subset")
+            ts_note = ""
+            if "ts_eu_025" in r and not pd.isna(r.get("ts_eu_025")):
+                ts_note = (
+                    f" | TS: EU(25%)={_fmt(r['ts_eu_025'])}, "
+                    f"EU(50%)={_fmt(r['ts_eu_050'])}, EU(100%)={_fmt(r['ts_eu_100'])}, "
+                    f"drop={_fmt(r['ts_eu_drop_025_to_100'])} "
+                    f"[{_fmt(r['ts_drop_ci_low'])}, {_fmt(r['ts_drop_ci_high'])}] "
+                    f"-> **{r['ts_status']}**"
+                )
             decision_lines.append(
-                f"- **Experiment 4 Positive Control ({r['architecture']} / {r['arm']}, "
-                f"folds {r['shared_folds']})**: EU(25%)={_fmt(r['eu_025'])}, "
+                f"- **Experiment 4 Positive Control ({r['architecture']} / {regime} / "
+                f"{r['arm']}, folds {r['shared_folds']})**: "
+                f"EU(25%)={_fmt(r['eu_025'])}, "
                 f"EU(50%)={_fmt(r['eu_050'])}, EU(100%)={_fmt(r['eu_100'])}, "
                 f"drop={_fmt(r['eu_drop_025_to_100'])} "
                 f"[{_fmt(r['drop_ci_low'])}, {_fmt(r['drop_ci_high'])}], "
-                f"monotonic={r['monotonic_decrease']} -> **{r['status']}**."
+                f"monotonic={r['monotonic_decrease']} -> **{r['status']}**{ts_note}."
             )
 
     sections.append("\n".join(decision_lines))
@@ -1160,26 +1388,35 @@ class PairedAnalysis:
             self.seed,
         )
 
-        patient = (
-            frame.groupby("patient_id")
-            .agg(
-                n_images=("img_id", "size"),
-                image_total=("image_total", "mean"),
-                multimodal_total=("multimodal_total", "mean"),
-                image_aleatoric=("image_aleatoric", "mean"),
-                multimodal_aleatoric=("multimodal_aleatoric", "mean"),
-                image_epistemic=("image_epistemic", "mean"),
-                multimodal_epistemic=("multimodal_epistemic", "mean"),
-                image_variance_epistemic=("image_variance_epistemic", "mean"),
-                multimodal_variance_epistemic=("multimodal_variance_epistemic", "mean"),
-                image_normalized_epistemic=("image_normalized_epistemic", "mean"),
-                multimodal_normalized_epistemic=("multimodal_normalized_epistemic", "mean"),
-                depistemic=("depistemic", "mean"),
-                dvariance_epistemic=("dvariance_epistemic", "mean"),
-                dnormalized_epistemic=("dnormalized_epistemic", "mean"),
-            )
-            .reset_index()
-        )
+        patient_agg: dict[str, tuple[str, str]] = {
+            "n_images": ("img_id", "size"),
+            "image_total": ("image_total", "mean"),
+            "multimodal_total": ("multimodal_total", "mean"),
+            "image_aleatoric": ("image_aleatoric", "mean"),
+            "multimodal_aleatoric": ("multimodal_aleatoric", "mean"),
+            "image_epistemic": ("image_epistemic", "mean"),
+            "multimodal_epistemic": ("multimodal_epistemic", "mean"),
+            "image_variance_epistemic": ("image_variance_epistemic", "mean"),
+            "multimodal_variance_epistemic": ("multimodal_variance_epistemic", "mean"),
+            "image_normalized_epistemic": ("image_normalized_epistemic", "mean"),
+            "multimodal_normalized_epistemic": ("multimodal_normalized_epistemic", "mean"),
+            "depistemic": ("depistemic", "mean"),
+            "dvariance_epistemic": ("dvariance_epistemic", "mean"),
+            "dnormalized_epistemic": ("dnormalized_epistemic", "mean"),
+        }
+        has_ts = "dts_epistemic" in frame.columns
+        if has_ts:
+            for col in (
+                "image_ts_total",
+                "multimodal_ts_total",
+                "image_ts_aleatoric",
+                "multimodal_ts_aleatoric",
+                "image_ts_epistemic",
+                "multimodal_ts_epistemic",
+                "dts_epistemic",
+            ):
+                patient_agg[col] = (col, "mean")
+        patient = frame.groupby("patient_id").agg(**patient_agg).reset_index()
 
         condition_dir = self.output_dir / label
         condition_dir.mkdir(parents=True, exist_ok=True)
@@ -1235,6 +1472,7 @@ class PairedAnalysis:
             "condition": label,
             "architecture": str(_config_value(first, "model.image_encoder.arch")),
             "train_fraction": float(_config_value(first, "data.train_fraction") or 1.0),
+            "epochs": int(_config_value(first, "train.epochs") or 0),
             "folds": ",".join(str(fold) for fold in sorted(image)),
             "n_images": len(frame),
             "n_patients": int(frame["patient_id"].nunique()),
@@ -1286,6 +1524,40 @@ class PairedAnalysis:
             "image_eu_error_auroc": eu_err.get("image"),
             "multimodal_eu_error_auroc": eu_err.get("multimodal"),
         }
+        if has_ts:
+            ts_diffs = patient["dts_epistemic"].to_numpy()
+            ts_lo, ts_hi = bootstrap_mean_ci(ts_diffs, self.bootstrap_samples, self.seed)
+            record.update(
+                {
+                    "image_mean_temp": float(frame["image_mean_temp"].mean()),
+                    "multimodal_mean_temp": float(frame["multimodal_mean_temp"].mean()),
+                    "image_ts_nll": float(frame["image_ts_nll"].mean()),
+                    "multimodal_ts_nll": float(frame["multimodal_ts_nll"].mean()),
+                    "mean_image_ts_total": float(patient["image_ts_total"].mean()),
+                    "mean_multimodal_ts_total": float(
+                        patient["multimodal_ts_total"].mean()
+                    ),
+                    "mean_image_ts_aleatoric": float(
+                        patient["image_ts_aleatoric"].mean()
+                    ),
+                    "mean_multimodal_ts_aleatoric": float(
+                        patient["multimodal_ts_aleatoric"].mean()
+                    ),
+                    "mean_image_ts_epistemic": float(
+                        patient["image_ts_epistemic"].mean()
+                    ),
+                    "mean_multimodal_ts_epistemic": float(
+                        patient["multimodal_ts_epistemic"].mean()
+                    ),
+                    "mean_ts_deu": float(ts_diffs.mean()),
+                    "ts_deu_ci_low": ts_lo,
+                    "ts_deu_ci_high": ts_hi,
+                    "ts_wilcoxon_p": _paired_test(
+                        patient["image_ts_epistemic"].to_numpy(),
+                        patient["multimodal_ts_epistemic"].to_numpy(),
+                    ),
+                }
+            )
         return record, frame, fold_df, summary, curves_df, missing_df
 
     def run(self) -> Path:
@@ -1315,7 +1587,7 @@ class PairedAnalysis:
             if missing_df is not None:
                 condition_missing[label] = missing_df
 
-        comparison = pd.DataFrame(records)
+        comparison = _attach_budget_regime(pd.DataFrame(records))
         all_folds = pd.concat(fold_tables, ignore_index=True)
         agreement = _eu_measures_agreement(condition_frames)
         positive_control = _positive_control_summary(
