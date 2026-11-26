@@ -134,6 +134,34 @@ def test_eu_experiment_presets_fully_fine_tune_five_member_ensembles(
     assert (cfg.model.get("tabular_encoder") is not None) is uses_metadata
 
 
+@pytest.mark.parametrize(
+    ("experiment", "uses_metadata", "permute_metadata"),
+    [
+        ("eu_v2_r18_image_only", False, False),
+        ("eu_v2_r18_multimodal", True, False),
+        ("eu_v2_r18_permuted_multimodal", True, True),
+    ],
+)
+def test_eu_v2_experiment_presets_use_val_loss_derm_aug_and_scheduler(
+    experiment, uses_metadata, permute_metadata
+):
+    cfg = _compose([f"experiment={experiment}"])
+    assert cfg.split.n_folds == 5
+    assert cfg.model.image_encoder.arch == "resnet18"
+    assert cfg.model.image_encoder.freeze is False
+    assert cfg.data.augmentation == "derm"
+    assert cfg.data.permute_metadata is permute_metadata
+    assert cfg.train.monitor == "val_loss"
+    assert cfg.train.early_stopping_patience == 8
+    assert cfg.train.epochs == 25
+    assert cfg.train.weighted_loss is False
+    assert cfg.train.optimizer.lr == pytest.approx(1e-4)
+    assert cfg.train.optimizer.weight_decay == pytest.approx(0.01)
+    assert cfg.train.scheduler._target_ == "torch.optim.lr_scheduler.ReduceLROnPlateau"
+    assert list(cfg.ensemble.seeds) == [0, 1, 2, 3, 4]
+    assert (cfg.model.get("tabular_encoder") is not None) is uses_metadata
+
+
 def test_analyze_config_composes_and_matches_target():
     with initialize_config_dir(config_dir=str(CONFIGS), version_base="1.3"):
         cfg = compose("analyze")

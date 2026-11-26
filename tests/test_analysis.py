@@ -49,6 +49,9 @@ def _write_artifact(
     arch: str = "resnet18",
     train_fraction: float = 1.0,
     epochs: int = 10,
+    monitor: str = "val_macro_f1",
+    augmentation: str = "flip",
+    permute_metadata: bool = False,
     seeds: tuple[int, ...] = (0, 1, 2),
     labels: list[int] | None = None,
     img_ids: list[str] | None = None,
@@ -77,9 +80,11 @@ def _write_artifact(
             "data": {
                 "train_fraction": train_fraction,
                 "train_subset_seed": 42,
+                "augmentation": augmentation,
+                "permute_metadata": permute_metadata,
                 "metadata_csv": str(metadata_csv) if metadata_csv else None,
             },
-            "train": {"epochs": epochs},
+            "train": {"epochs": epochs, "monitor": monitor},
             "model": {
                 "image_encoder": {"arch": arch, "freeze": False},
                 "tabular_encoder": tabular_encoder,
@@ -379,3 +384,76 @@ def test_temperature_scaling_and_step_matched_positive_control_regimes(tmp_path)
     assert "## 1b. Post-Hoc Validation Temperature-Scaled Epistemic Uncertainty" in md_text
     assert "fixed_epochs" in md_text and "step_matched" in md_text
     assert (output / "train_fraction.png").stat().st_size > 0
+
+
+def test_recipe_isolation_and_permuted_metadata_auto_pairing(tmp_path):
+    runs_root = tmp_path / "runs"
+    meta_path = tmp_path / "metadata.csv"
+    _write_metadata(meta_path, folds=(0, 1))
+
+    # v1 100% + v1 25% (failing) alongside v2 100% + v2 25% (passing) + v2 permuted multimodal
+    for fold in (0, 1):
+        # v1 runs (val_macro_f1 / flip)
+        for prefix, frac, epochs, img_s, mm_s in [
+            ("eu_baseline_r18", 1.0, 10, 0.30, 0.20),
+            ("eu_size_r18_f025", 0.25, 10, 0.10, 0.08),
+        ]:
+            _write_artifact(
+                runs_root / f"{prefix}_image_only-f{fold}",
+                _make_probs(img_s), None, name=f"{prefix}_image_only",
+                fold=fold, train_fraction=frac, epochs=epochs,
+                monitor="val_macro_f1", augmentation="flip",
+                metadata_csv=meta_path, logit_scale=1.5,
+            )
+            _write_artifact(
+                runs_root / f"{prefix}_multimodal-f{fold}",
+                _make_probs(mm_s), {"hidden_dims": [64]}, name=f"{prefix}_multimodal",
+                fold=fold, train_fraction=frac, epochs=epochs,
+                monitor="val_macro_f1", augmentation="flip",
+                metadata_csv=meta_path, logit_scale=1.5,
+            )
+        # v2 runs (val_loss / derm)
+        for prefix, frac, epochs, img_s, mm_s in [
+            ("eu_v2_r18", 1.0, 25, 0.12, 0.05),
+            ("eu_v2_r18_f025", 0.25, 100, 0.38, 0.22),
+        ]:
+            _write_artifact(
+                runs_root / f"{prefix}_image_only-f{fold}",
+                _make_probs(img_s), None, name=f"{prefix}_image_only",
+                fold=fold, train_fraction=frac, epochs=epochs,
+                monitor="val_loss", augmentation="derm",
+                metadata_csv=meta_path, logit_scale=1.2,
+            )
+            _write_artifact(
+                runs_root / f"{prefix}_multimodal-f{fold}",
+                _make_probs(mm_s), {"hidden_dims": [64]}, name=f"{prefix}_multimodal",
+                fold=fold, train_fraction=frac, epochs=epochs,
+                monitor="val_loss", augmentation="derm",
+                metadata_csv=meta_path, logit_scale=1.2,
+            )
+        # v2 permuted multimodal (no dedicated image arm; must auto-pair with eu_v2_r18_image_only)
+        _write_artifact(
+            runs_root / f"eu_v2_r18_permuted_multimodal-f{fold}",
+            _make_probs(0.12), {"hidden_dims": [64]}, name="eu_v2_r18_permuted_multimodal",
+            fold=fold, train_fraction=1.0, epochs=25,
+            monitor="val_loss", augmentation="derm", permute_metadata=True,
+            metadata_csv=meta_path, logit_scale=1.2,
+        )
+
+    output = PairedAnalysis(
+        runs_root=str(runs_root),
+        output_dir=str(tmp_path / "analysis"),
+        bootstrap_samples=100,
+        seed=42,
+    ).run()
+
+    comp = pd.read_csv(output / "condition_comparison.csv")
+    assert "eu_v2_r18_permuted" in set(comp["condition"])
+    assert comp["image_prior_adjusted_balanced_accuracy"].notna().all()
+
+    pos = pd.read_csv(output / "positive_control_summary.csv")
+    v1_pos = pos[pos["recipe"] == "val_macro_f1|flip"]
+    v2_pos = pos[pos["recipe"] == "val_loss|derm"]
+    assert len(v1_pos) == 2 and (v1_pos["status"] == "UNCLEAR_EXPAND_FOLDS").all()
+    assert len(v2_pos) == 2 and (v2_pos["status"] == "PASS").all()
+    assert (v2_pos["budget_regime"] == "step_matched").all()

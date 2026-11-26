@@ -222,6 +222,35 @@ If EU does not decrease monotonically or the 25%-vs-100% patient bootstrap CI in
 not clearly inverted), expand folds 2-4 with `--array=2-4%2` using the exact same `name=...`
 overrides, then run `sbatch scripts/slurm/analyze.sbatch` one final time.
 
+### Stage 4: `eu_v2` Calibrated ResNet18 Suite (`val_loss` + early stopping + `derm` aug + LR decay)
+
+`eu_v2_r18_*` uses `train=eu_v2` (`monitor=val_loss`, `early_stopping_patience=8`, `epochs=25`,
+`AdamW(lr=1e-4, weight_decay=0.01)`, `ReduceLROnPlateau(mode=min, factor=0.5, patience=3)`),
+`data.augmentation=derm`, and full ResNet18 fine-tuning. Step-matched positive-control max budgets
+are `epochs=50` (50%) and `epochs=100` (25%); early stopping halts each member after validation
+loss stops improving. `src/analysis.py` isolates v1 and v2 recipes automatically and pairs
+`eu_v2_r18_permuted_multimodal` with `eu_v2_r18_image_only`:
+
+```bash
+# Main v2 comparison (100%, 5 folds) + permuted-metadata negative control (folds 0-1 screen):
+sbatch --partition=universe --qos=master-queuesave --array=0-4%2 scripts/slurm/fold_ensemble_array.sbatch \
+  experiment=eu_v2_r18_image_only
+sbatch --partition=universe --qos=master-queuesave --array=0-4%2 scripts/slurm/fold_ensemble_array.sbatch \
+  experiment=eu_v2_r18_multimodal
+sbatch --partition=universe --qos=master-queuesave --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
+  experiment=eu_v2_r18_permuted_multimodal
+
+# Step-matched positive control under the same v2 recipe (folds 0-1 screen):
+sbatch --partition=universe --qos=master-queuesave --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
+  experiment=eu_v2_r18_image_only data.train_fraction=0.5 train.epochs=50 name=eu_v2_r18_f050_image_only
+sbatch --partition=universe --qos=master-queuesave --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
+  experiment=eu_v2_r18_multimodal data.train_fraction=0.5 train.epochs=50 name=eu_v2_r18_f050_multimodal
+sbatch --partition=universe --qos=master-queuesave --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
+  experiment=eu_v2_r18_image_only data.train_fraction=0.25 train.epochs=100 name=eu_v2_r18_f025_image_only
+sbatch --partition=universe --qos=master-queuesave --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
+  experiment=eu_v2_r18_multimodal data.train_fraction=0.25 train.epochs=100 name=eu_v2_r18_f025_multimodal
+```
+
 ### Pull lightweight analysis tables and plots back to your laptop
 
 Do **not** transfer large `.pt` checkpoints back to your laptop; sync only `outputs/analysis/`:

@@ -1,0 +1,8 @@
+# @package _global_
+defaults:
+  - eu_v2_r18_multimodal
+
+name: eu_v2_r18_permuted_multimodal
+data:
+  permute_metadata: true
+  permute_metadata_seed: 42

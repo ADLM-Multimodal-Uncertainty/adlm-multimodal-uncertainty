@@ -29,9 +29,13 @@ from src.data.dataset import build_fold
 from src.evaluate import Predictions, evaluate_run, predict, resolve_device
 from src.metrics import METRIC_NAMES, summary_metrics
 from src.models import MultimodalClassifier, build_model
+from src.uq.deep_ensemble import evaluate_ensemble
 from src.visualize import plot_run
 
 log = logging.getLogger(__name__)
+
+MINIMIZE_MONITORS = {"val_loss"}
+VALID_MONITORS = {"val_loss", *(f"val_{name}" for name in METRIC_NAMES)}
 
 
 def seed_everything(seed: int) -> None:
@@ -92,6 +96,10 @@ def train_run(cfg: DictConfig) -> None:
     optimizer = instantiate(
         cfg.train.optimizer, params=[p for p in model.parameters() if p.requires_grad]
     )
+    scheduler_cfg = cfg.train.get("scheduler")
+    scheduler = (
+        instantiate(scheduler_cfg, optimizer=optimizer) if scheduler_cfg is not None else None
+    )
     weight = class_weights(data.train.labels, device) if cfg.train.weighted_loss else None
     criterion = instantiate(cfg.train.loss, weight=weight)
 
@@ -101,10 +109,21 @@ def train_run(cfg: DictConfig) -> None:
             data.train, batch_size=cfg.train.batch_size, num_workers=cfg.data.num_workers
         )
 
-    monitor = cfg.train.monitor
-    best = -np.inf
+    monitor = str(cfg.train.monitor)
+    if monitor not in VALID_MONITORS:
+        raise ValueError(
+            f"unknown train.monitor {monitor!r}; expected one of {sorted(VALID_MONITORS)}"
+        )
+    minimize = monitor in MINIMIZE_MONITORS
+    best = np.inf if minimize else -np.inf
+    patience_raw = cfg.train.get("early_stopping_patience")
+    patience = int(patience_raw) if patience_raw is not None else None
+    if patience is not None and patience < 1:
+        raise ValueError(f"early_stopping_patience must be >= 1 or null, got {patience}")
+    stale_epochs = 0
+
     with (run_dir / "history.csv").open("w", newline="") as f:
-        fields = ["epoch", "train_loss", "val_loss"]
+        fields = ["epoch", "lr", "train_loss", "val_loss"]
         if train_eval_loader is not None:
             fields += [f"train_{name}" for name in METRIC_NAMES]
         fields += [f"val_{name}" for name in METRIC_NAMES]
@@ -114,22 +133,47 @@ def train_run(cfg: DictConfig) -> None:
             train_loss = train_epoch(model, train_loader, optimizer, criterion, device)
             model.eval()
             val = predict(model, val_loader, device, criterion)
-            record = {"epoch": epoch, "train_loss": train_loss, "val_loss": val.loss}
+            record = {
+                "epoch": epoch,
+                "lr": float(optimizer.param_groups[0]["lr"]),
+                "train_loss": train_loss,
+                "val_loss": val.loss,
+            }
             if train_eval_loader is not None:
-                # The training transform draws random numbers (flip); restore the generator so
-                # tracking train metrics does not change the batches or dropout of later epochs.
+                # The training transform draws random numbers (augmentation); restore the generator
+                # so tracking train metrics does not change the batches or dropout of later epochs.
                 with torch.random.fork_rng(devices=[]):
                     record.update(score(predict(model, train_eval_loader, device), "train"))
             record.update(score(val, "val"))
             writer.writerow(record)
             f.flush()
             log.info(json.dumps(record))
-            if record[monitor] > best:
+            improved = (record[monitor] < best) if minimize else (record[monitor] > best)
+            if improved:
                 best = record[monitor]
+                stale_epochs = 0
                 torch.save(
                     {"state_dict": model.state_dict(), "epoch": epoch, monitor: best},
                     run_dir / "best.pt",
                 )
+            else:
+                stale_epochs += 1
+
+            if scheduler is not None:
+                if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                    scheduler.step(record["val_loss"])
+                else:
+                    scheduler.step()
+
+            if patience is not None and stale_epochs >= patience:
+                log.info(
+                    "early stopping at epoch %d after %d epochs without improving %s (best %.4f)",
+                    epoch,
+                    stale_epochs,
+                    monitor,
+                    best,
+                )
+                break
 
     metrics = evaluate_run(run_dir, device)
     plot_run(run_dir)
@@ -155,8 +199,6 @@ def main(cfg: DictConfig) -> None:
         member.run_name = f"{cfg.run_name}/members/seed_{seed}"
         member.run_dir = str(run_dir / "members" / f"seed_{seed}")
         train_run(member)
-    from src.uq.deep_ensemble import evaluate_ensemble
-
     evaluate_ensemble(run_dir, resolve_device(cfg.device))
 
 

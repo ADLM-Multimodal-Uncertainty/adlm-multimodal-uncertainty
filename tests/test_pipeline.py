@@ -4,11 +4,16 @@ import json
 import subprocess
 import sys
 
+import numpy as np
 import pandas as pd
 import pytest
 from omegaconf import OmegaConf
+from PIL import Image
 
 from src import CLASSES
+from src.data.dataset import build_fold
+from src.data.splits import PatientHoldoutSplit
+from src.data.transforms import image_transform
 
 from .conftest import REPO
 
@@ -90,3 +95,70 @@ def test_five_fold_multirun(mode, n_folds, synthetic_root, tmp_path):
         tested.append(set(predictions["patient_id"]))
     for i, patients in enumerate(tested):
         assert all(not patients.intersection(other) for other in tested[i + 1:])
+
+
+def test_image_transform_presets_and_validation():
+    img = Image.fromarray(np.full((48, 48, 3), 120, dtype=np.uint8))
+    for preset in ("none", "flip", "derm"):
+        train_out = image_transform(32, training=True, augmentation=preset)(img)
+        val_out = image_transform(32, training=False, augmentation=preset)(img)
+        assert train_out.shape == (3, 32, 32)
+        assert val_out.shape == (3, 32, 32)
+    with pytest.raises(ValueError, match="unknown augmentation preset"):
+        image_transform(32, training=True, augmentation="invalid")
+
+
+def test_permute_metadata_shuffles_deterministically_per_split(synthetic_root):
+    data_yaml = OmegaConf.load(REPO / "configs" / "data" / "pad_ufes20.yaml")
+    root_cfg = OmegaConf.create({"data": data_yaml})
+    root_cfg.data.root = str(synthetic_root)
+    root_cfg.data.image_size = 32
+    split = PatientHoldoutSplit(val_size=0.2, test_size=0.2, seed=42)
+
+    clean = build_fold(root_cfg.data, split, fold=0)
+    perm_root = OmegaConf.create(OmegaConf.to_container(root_cfg, resolve=True))
+    perm_root.data.permute_metadata = True
+    perm_root.data.permute_metadata_seed = 7
+    perm_a = build_fold(perm_root.data, split, fold=0)
+    perm_b = build_fold(perm_root.data, split, fold=0)
+
+    for name in ("train", "val", "test"):
+        clean_feats = getattr(clean, name).features
+        perm_a_feats = getattr(perm_a, name).features
+        perm_b_feats = getattr(perm_b, name).features
+        assert np.array_equal(perm_a_feats, perm_b_feats)
+        assert not np.array_equal(clean_feats, perm_a_feats)
+        # Same multiset of rows (marginal distribution preserved within split)
+        assert np.allclose(np.sort(clean_feats, axis=0), np.sort(perm_a_feats, axis=0))
+
+
+def test_eu_v2_training_supports_val_loss_scheduler_early_stopping_and_derm_aug(
+    synthetic_root, tmp_path
+):
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "src.train",
+            "experiment=eu_v2_r18_multimodal",
+            "~ensemble",
+            "split.n_folds=2",
+            f"data.root={synthetic_root}",
+            f"output_root={tmp_path / 'outputs'}",
+            "data.image_size=32",
+            "train.epochs=4",
+            "train.early_stopping_patience=2",
+            "train.batch_size=16",
+            "model.image_encoder.pretrained=false",
+            "device=cpu",
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    run_dir = tmp_path / "outputs" / "runs" / "eu_v2_r18_multimodal-patient_kfold-f0-s42"
+    history = pd.read_csv(run_dir / "history.csv")
+    assert "lr" in history.columns
+    assert 1 <= len(history) <= 4
+    assert (run_dir / "best.pt").exists()
+    metrics = json.loads((run_dir / "test_metrics.json").read_text())
+    assert "per_class_ovr_auroc" in metrics

@@ -1,0 +1,19 @@
+# @package _global_
+defaults:
+  - deep_ensemble
+  - override /split: patient_kfold
+  - override /model/image_encoder: resnet18
+  - override /train: eu_v2
+
+name: eu_v2_r18_multimodal
+split:
+  n_folds: 5
+data:
+  augmentation: derm
+model:
+  image_encoder:
+    freeze: false
+hydra:
+  sweeper:
+    params:
+      fold: range(0,${split.n_folds})

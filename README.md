@@ -135,9 +135,19 @@ Training curves and confusion matrix plots remain in each member directory.
 
 ## Paired EU experiments
 
-The named EU presets use the committed five-fold patient split, five ensemble members,
-ImageNet initialization, full backbone fine-tuning and an AdamW learning rate of `1e-4`.
-Run the ResNet18 baseline on all folds:
+The `eu_v2_r18_*` presets are the calibrated ResNet18 setup (`train=eu_v2`: `monitor=val_loss`,
+`early_stopping_patience=8`, `epochs=25`, `AdamW(lr=1e-4, weight_decay=0.01)`,
+`ReduceLROnPlateau(mode=min, factor=0.5, patience=3, min_lr=1e-6)`, `data.augmentation=derm`,
+full backbone fine-tuning, five ensemble seeds `[0, 1, 2, 3, 4]`, committed 5-fold patient split):
+
+```bash
+scripts/local/run.sh -m experiment=eu_v2_r18_image_only
+scripts/local/run.sh -m experiment=eu_v2_r18_multimodal
+scripts/local/run.sh -m experiment=eu_v2_r18_permuted_multimodal   # negative control
+```
+
+The earlier v1 `eu_baseline_r18_*` and `eu_resnet50_*` presets (`monitor=val_macro_f1`,
+`data.augmentation=flip`, 10 epochs) remain unchanged for comparison:
 
 ```bash
 scripts/local/run.sh -m experiment=eu_baseline_r18_image_only

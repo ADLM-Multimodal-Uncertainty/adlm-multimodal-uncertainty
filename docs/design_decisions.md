@@ -97,7 +97,7 @@ Current: all 21 clinical attributes (3 numeric, 18 categorical), listed in
 - Drop ancestry and socioeconomic covariates (`background_*`, `has_piped_water`,
   `has_sewage_system`): **Available** (same lists)
 - No metadata (image only, `experiment=draft_image_only`): **Available**
-- Permuted-metadata control (shuffle metadata across images): **Not implemented**
+- Permuted-metadata control (`data.permute_metadata=true`, `experiment=eu_v2_r18_permuted_multimodal`): **Available** (deterministic split-isolated row shuffle preserving marginals)
 
 ### B2. Numeric imputation
 - Training median: **Current**
@@ -283,9 +283,9 @@ backbone; projection and heads are trained independently.
 - More epochs, e.g. 30 (`train.epochs=30`): **Available**
 
 ### G3. Early stopping and checkpoint choice
-- No early stopping; keep the epoch with the best `train.monitor`: **Current**
-- Early stopping with patience on validation loss or macro-F1: **Not implemented**
-- Select on validation loss (lower is better): **Not implemented** (`monitor` only maximises)
+- No early stopping; keep the epoch with the best `train.monitor`: **Current** (`train=draft`)
+- Early stopping with patience (`train.early_stopping_patience=8`) and `monitor=val_loss`
+  (lower is better): **Available** (`train=eu_v2`)
 - Keep the last epoch: **Not implemented**
 - Checkpoint averaging / SWA: **Not implemented**
 
@@ -298,10 +298,10 @@ backbone; projection and heads are trained independently.
 - Separate learning rates for backbone and heads: **Not implemented**
 
 ### G5. Learning-rate schedule
-- Constant learning rate: **Current**
-- Cosine annealing: **Not implemented**
+- Constant learning rate (`train.scheduler=null`): **Current**
+- Reduce on plateau (`train=eu_v2`, `torch.optim.lr_scheduler.ReduceLROnPlateau`): **Available**
+- Cosine annealing / any `torch.optim.lr_scheduler.*` via `train.scheduler._target_`: **Available**
 - Linear warmup: **Not implemented**
-- Reduce on plateau: **Not implemented**
 
 ### G6. Batch size and precision
 - Batch size 32, full precision: **Current**

@@ -34,7 +34,7 @@ from src.analysis_plots import (
     plot_training_curves,
     plot_uncertainty,
 )
-from src.metrics import detailed_metrics
+from src.metrics import detailed_metrics, summary_metrics
 from src.uq.deep_ensemble import uncertainty
 
 log = logging.getLogger(__name__)
@@ -199,17 +199,40 @@ def _config_value(artifact: EnsembleArtifact, path: str) -> Any:
     return OmegaConf.to_container(value, resolve=True) if OmegaConf.is_config(value) else value
 
 
-def _condition_signature(cfg: DictConfig) -> str:
-    payload = {
-        path: (
-            OmegaConf.to_container(val, resolve=True)
-            if OmegaConf.is_config(val)
-            else val
-        )
-        for path in ("split", "data", "train", "model.image_encoder", "ensemble.seeds")
-        for val in (OmegaConf.select(cfg, path),)
+def _strip_permutation_keys(data_cfg: Any) -> Any:
+    if not isinstance(data_cfg, dict):
+        return data_cfg
+    return {
+        k: v
+        for k, v in data_cfg.items()
+        if k not in ("permute_metadata", "permute_metadata_seed")
     }
+
+
+def _condition_signature(cfg: DictConfig, *, ignore_permutation: bool = False) -> str:
+    payload = {}
+    for path in ("split", "data", "train", "model.image_encoder", "ensemble.seeds"):
+        val = OmegaConf.select(cfg, path)
+        resolved = OmegaConf.to_container(val, resolve=True) if OmegaConf.is_config(val) else val
+        if path == "data" and ignore_permutation:
+            resolved = _strip_permutation_keys(resolved)
+        payload[path] = resolved
     return json.dumps(payload, sort_keys=True)
+
+
+def _recipe_id(cfg: DictConfig) -> str:
+    """Short identifier for training/augmentation recipe so v1 and v2 runs stay separated."""
+    monitor = str(OmegaConf.select(cfg, "train.monitor") or "val_macro_f1")
+    aug = str(OmegaConf.select(cfg, "data.augmentation") or "flip")
+    parts = [monitor, aug]
+    sched_target = OmegaConf.select(cfg, "train.scheduler._target_")
+    if sched_target:
+        parts.append(str(sched_target).rsplit(".", 1)[-1])
+    if bool(OmegaConf.select(cfg, "train.weighted_loss")):
+        parts.append("weighted")
+    if bool(OmegaConf.select(cfg, "data.permute_metadata")):
+        parts.append("permuted")
+    return "|".join(parts)
 
 
 def _strip_arm_suffix(name: str) -> str:
@@ -227,6 +250,8 @@ def discover_conditions(runs_root: str | Path) -> dict[str, dict[str, list[str]]
 
     grouped: dict[str, dict[str, dict[int, Path]]] = {}
     base_names: dict[str, list[str]] = {}
+    sig_cfgs: dict[str, DictConfig] = {}
+    image_by_base_sig: dict[str, dict[int, Path]] = {}
     for run_dir in sorted(root.iterdir()):
         if not run_dir.is_dir():
             continue
@@ -247,17 +272,29 @@ def discover_conditions(runs_root: str | Path) -> dict[str, dict[str, list[str]]
                 f"{slot[arm][fold]} and {run_dir}"
             )
         slot[arm][fold] = run_dir
+        sig_cfgs.setdefault(signature, cfg)
+        if arm == "image" and not bool(OmegaConf.select(cfg, "data.permute_metadata")):
+            base_sig = _condition_signature(cfg, ignore_permutation=True)
+            image_by_base_sig.setdefault(base_sig, {})[fold] = run_dir
         name = str(cfg.get("name", run_dir.name))
         base_names.setdefault(signature, []).append(_strip_arm_suffix(name))
 
     conditions: dict[str, dict[str, list[str]]] = {}
     used_labels: set[str] = set()
     for signature, arms in grouped.items():
-        shared_folds = sorted(set(arms["image"]).intersection(arms["multimodal"]))
+        image_folds = arms["image"]
+        if (
+            not image_folds
+            and arms["multimodal"]
+            and bool(OmegaConf.select(sig_cfgs[signature], "data.permute_metadata"))
+        ):
+            base_sig = _condition_signature(sig_cfgs[signature], ignore_permutation=True)
+            image_folds = image_by_base_sig.get(base_sig, {})
+        shared_folds = sorted(set(image_folds).intersection(arms["multimodal"]))
         if not shared_folds:
             log.warning("skipping unpaired runs for signature %s", base_names[signature][0])
             continue
-        if set(arms["image"]) != set(arms["multimodal"]):
+        if set(image_folds) != set(arms["multimodal"]):
             log.warning(
                 "condition %s has partial fold overlap; using shared folds %s",
                 base_names[signature][0],
@@ -265,14 +302,14 @@ def discover_conditions(runs_root: str | Path) -> dict[str, dict[str, list[str]]
             )
         label = base_names[signature][0]
         if label in used_labels:
-            first_cfg = OmegaConf.load(arms["image"][shared_folds[0]] / "config.yaml")
+            first_cfg = OmegaConf.load(image_folds[shared_folds[0]] / "config.yaml")
             arch = OmegaConf.select(first_cfg, "model.image_encoder.arch")
             raw_frac = float(OmegaConf.select(first_cfg, "data.train_fraction") or 1.0)
             frac = int(round(raw_frac * 100))
             label = f"{label}_{arch}_f{frac:03d}"
         used_labels.add(label)
         conditions[label] = {
-            "image_run_dirs": [str(arms["image"][f]) for f in shared_folds],
+            "image_run_dirs": [str(image_folds[f]) for f in shared_folds],
             "multimodal_run_dirs": [str(arms["multimodal"][f]) for f in shared_folds],
         }
 
@@ -310,7 +347,12 @@ def _pair_fold(
         "model.image_encoder",
         "ensemble.seeds",
     ):
-        if _config_value(image, path) != _config_value(multimodal, path):
+        left = _config_value(image, path)
+        right = _config_value(multimodal, path)
+        if path == "data":
+            left = _strip_permutation_keys(left)
+            right = _strip_permutation_keys(right)
+        if left != right:
             raise ValueError(
                 f"paired runs disagree on {path}: {image.run_dir}, {multimodal.run_dir}"
             )
@@ -404,6 +446,15 @@ def _fold_frame(
         )
         frame["image_mean_temp"] = float(img_temps.mean())
         frame["multimodal_mean_temp"] = float(mm_temps.mean())
+    if image.val_labels is not None and len(image.val_labels) > 0:
+        counts = np.bincount(image.val_labels, minlength=len(classes)).astype(float)
+        if (counts == 0).any():
+            counts += 1.0
+        val_prior = counts / counts.sum()
+        frame["image_prior_adjusted_pred"] = (image_mean / val_prior[None, :]).argmax(axis=1)
+        frame["multimodal_prior_adjusted_pred"] = (
+            multimodal_mean / val_prior[None, :]
+        ).argmax(axis=1)
     for index, name in enumerate(classes):
         frame[f"image_p_{name}"] = image_mean[:, index]
         frame[f"multimodal_p_{name}"] = multimodal_mean[:, index]
@@ -491,7 +542,21 @@ def summarize_uncertainty(
 def _classification_metrics(frame: pd.DataFrame, arm: str, classes: list[str]) -> dict:
     labels = frame["label"].to_numpy()
     probs = frame[[f"{arm}_p_{name}" for name in classes]].to_numpy()
-    return detailed_metrics(labels, probs.argmax(axis=1), classes, probs)
+    metrics = detailed_metrics(labels, probs.argmax(axis=1), classes, probs)
+    pa_col = f"{arm}_prior_adjusted_pred"
+    if pa_col in frame.columns and frame[pa_col].notna().all():
+        pa_preds = frame[pa_col].to_numpy(dtype=int)
+        pa_summary = summary_metrics(labels, pa_preds, len(classes))
+        metrics["prior_adjusted_balanced_accuracy"] = pa_summary["balanced_accuracy"]
+        metrics["prior_adjusted_macro_f1"] = pa_summary["macro_f1"]
+        for cls_name in ("MEL", "SCC"):
+            if cls_name in classes:
+                cls_idx = classes.index(cls_name)
+                mask = labels == cls_idx
+                metrics[f"prior_adjusted_{cls_name.lower()}_recall"] = (
+                    float((pa_preds[mask] == cls_idx).mean()) if mask.any() else None
+                )
+    return metrics
 
 
 def _error_detection_summary(frame: pd.DataFrame) -> pd.DataFrame:
@@ -816,15 +881,23 @@ def _attach_budget_regime(comparison: pd.DataFrame) -> pd.DataFrame:
     """Tag each condition as full, fixed_epochs, step_matched, or custom epochs."""
     out = comparison.copy()
     regimes: list[str] = []
-    anchor_epochs: dict[str, int] = {}
-    for arch, group in out.groupby("architecture"):
+    has_recipe = "recipe" in out.columns
+    group_cols = ["architecture", "recipe"] if has_recipe else ["architecture"]
+    anchor_epochs: dict[tuple[str, ...], int] = {}
+    for key, group in out.groupby(group_cols):
+        group_key = tuple(str(k) for k in (key if isinstance(key, tuple) else (key,)))
         full = group[np.isclose(group["train_fraction"], 1.0)]
         if not full.empty and "epochs" in full.columns:
-            anchor_epochs[str(arch)] = int(full.iloc[0]["epochs"])
+            anchor_epochs[group_key] = int(full.iloc[0]["epochs"])
     for _, row in out.iterrows():
         frac = float(row["train_fraction"])
         epochs = int(row.get("epochs", 0) or 0)
-        base_epochs = anchor_epochs.get(str(row["architecture"]), 0)
+        row_key = (
+            (str(row["architecture"]), str(row["recipe"]))
+            if has_recipe
+            else (str(row["architecture"]),)
+        )
+        base_epochs = anchor_epochs.get(row_key, 0)
         if np.isclose(frac, 1.0):
             regimes.append("full")
         elif base_epochs > 0 and epochs == base_epochs:
@@ -849,7 +922,14 @@ def _positive_control_summary(
         if "budget_regime" in comparison.columns
         else _attach_budget_regime(comparison)
     )
-    for arch, group in tagged.groupby("architecture"):
+    has_recipe = "recipe" in tagged.columns
+    group_cols = ["architecture", "recipe"] if has_recipe else ["architecture"]
+    for key, group in tagged.groupby(group_cols):
+        if has_recipe:
+            arch, recipe = key
+        else:
+            arch = key[0] if isinstance(key, tuple) else key
+            recipe = "default"
         full_rows = group[np.isclose(group["train_fraction"], 1.0)]
         if full_rows.empty:
             continue
@@ -921,6 +1001,7 @@ def _positive_control_summary(
                 )
                 row_entry: dict[str, Any] = {
                     "architecture": str(arch),
+                    "recipe": str(recipe),
                     "budget_regime": str(regime),
                     "arm": arm,
                     "shared_folds": ",".join(str(f) for f in shared_folds),
@@ -1108,6 +1189,45 @@ def _write_summary_tables_md(
                 + _markdown_table(ts_headers, ts_rows)
             )
 
+    if (
+        "image_prior_adjusted_balanced_accuracy" in comparison.columns
+        and comparison["image_prior_adjusted_balanced_accuracy"].notna().any()
+    ):
+        pa_headers = [
+            "Condition",
+            "Recipe",
+            "Arm",
+            "Raw BalAcc",
+            "PA BalAcc",
+            "Raw MEL Rec",
+            "PA MEL Rec",
+            "MEL AUROC",
+            "SCC AUROC",
+        ]
+        pa_rows: list[list[str]] = []
+        for _, r in comparison.iterrows():
+            if pd.isna(r.get("image_prior_adjusted_balanced_accuracy")):
+                continue
+            for arm in ("image", "multimodal"):
+                pa_rows.append(
+                    [
+                        str(r["condition"]),
+                        str(r.get("recipe", "default")),
+                        arm,
+                        _fmt(r.get(f"{arm}_balanced_accuracy"), 3),
+                        _fmt(r.get(f"{arm}_prior_adjusted_balanced_accuracy"), 3),
+                        _fmt(r.get(f"{arm}_mel_recall"), 3),
+                        _fmt(r.get(f"{arm}_prior_adjusted_mel_recall"), 3),
+                        _fmt(r.get(f"{arm}_mel_ovr_auroc"), 3),
+                        _fmt(r.get(f"{arm}_scc_ovr_auroc"), 3),
+                    ]
+                )
+        if pa_rows:
+            sections.append(
+                "## 1c. Class-Imbalance Diagnostics (Post-Hoc Prior Adjustment & OvR AUROC)\n\n"
+                + _markdown_table(pa_headers, pa_rows)
+            )
+
     fold_headers = [
         "Condition",
         "Fold",
@@ -1225,51 +1345,59 @@ def _write_summary_tables_md(
                 )
 
     full_by_arch = comparison[np.isclose(comparison["train_fraction"], 1.0)]
-    r18_rows = full_by_arch[full_by_arch["architecture"] == "resnet18"]
-    r50_rows = full_by_arch[full_by_arch["architecture"] == "resnet50"]
-    if not r18_rows.empty and not r50_rows.empty:
-        r18_cond = str(r18_rows.iloc[0]["condition"])
-        r50_cond = str(r50_rows.iloc[0]["condition"])
-        shared = sorted(
-            set(condition_frames[r18_cond]["fold"]).intersection(
-                condition_frames[r50_cond]["fold"]
-            )
-        )
-        if shared:
-            r18_sub = all_folds[
-                (all_folds["condition"] == r18_cond) & (all_folds["fold"].isin(shared))
-            ]
-            r50_sub = all_folds[
-                (all_folds["condition"] == r50_cond) & (all_folds["fold"].isin(shared))
-            ]
-            bal_diff_img = float(
-                r50_sub["image_balanced_accuracy"].mean()
-                - r18_sub["image_balanced_accuracy"].mean()
-            )
-            bal_diff_mm = float(
-                r50_sub["multimodal_balanced_accuracy"].mean()
-                - r18_sub["multimodal_balanced_accuracy"].mean()
-            )
-            deu_r18 = float(r18_sub["mean_deu"].mean())
-            deu_r50 = float(r50_sub["mean_deu"].mean())
-            sign_flip = np.sign(deu_r18) != np.sign(deu_r50)
-            expand_r50 = (
-                abs(bal_diff_img) > 0.02 or abs(bal_diff_mm) > 0.02 or bool(sign_flip)
-            )
-            decision_lines.append(
-                f"- **Experiment 6 (ResNet18 vs ResNet50 on shared folds {shared})**: "
-                f"image BalAcc delta = {bal_diff_img:+.3f}, multimodal BalAcc delta = "
-                f"{bal_diff_mm:+.3f}, mean dEU R18={deu_r18:.4f} vs R50={deu_r50:.4f} -> "
-                + (
-                    "**EXPAND ResNet50 to all 5 folds** (threshold triggered)."
-                    if expand_r50
-                    else "**KEEP ResNet18** (within 2 pp BalAcc and same dEU sign)."
+    recipe_groups = (
+        full_by_arch.groupby("recipe")
+        if "recipe" in full_by_arch.columns
+        else [("default", full_by_arch)]
+    )
+    for recipe, grp in recipe_groups:
+        r18_rows = grp[grp["architecture"] == "resnet18"]
+        r50_rows = grp[grp["architecture"] == "resnet50"]
+        if not r18_rows.empty and not r50_rows.empty:
+            r18_cond = str(r18_rows.iloc[0]["condition"])
+            r50_cond = str(r50_rows.iloc[0]["condition"])
+            shared = sorted(
+                set(condition_frames[r18_cond]["fold"]).intersection(
+                    condition_frames[r50_cond]["fold"]
                 )
             )
+            if shared:
+                r18_sub = all_folds[
+                    (all_folds["condition"] == r18_cond) & (all_folds["fold"].isin(shared))
+                ]
+                r50_sub = all_folds[
+                    (all_folds["condition"] == r50_cond) & (all_folds["fold"].isin(shared))
+                ]
+                bal_diff_img = float(
+                    r50_sub["image_balanced_accuracy"].mean()
+                    - r18_sub["image_balanced_accuracy"].mean()
+                )
+                bal_diff_mm = float(
+                    r50_sub["multimodal_balanced_accuracy"].mean()
+                    - r18_sub["multimodal_balanced_accuracy"].mean()
+                )
+                deu_r18 = float(r18_sub["mean_deu"].mean())
+                deu_r50 = float(r50_sub["mean_deu"].mean())
+                sign_flip = np.sign(deu_r18) != np.sign(deu_r50)
+                expand_r50 = (
+                    abs(bal_diff_img) > 0.02 or abs(bal_diff_mm) > 0.02 or bool(sign_flip)
+                )
+                decision_lines.append(
+                    f"- **Experiment 6 (ResNet18 vs ResNet50 [{recipe}] "
+                    f"on shared folds {shared})**: "
+                    f"image BalAcc delta = {bal_diff_img:+.3f}, multimodal BalAcc delta = "
+                    f"{bal_diff_mm:+.3f}, mean dEU R18={deu_r18:.4f} vs R50={deu_r50:.4f} -> "
+                    + (
+                        "**EXPAND ResNet50 to all 5 folds** (threshold triggered)."
+                        if expand_r50
+                        else "**KEEP ResNet18** (within 2 pp BalAcc and same dEU sign)."
+                    )
+                )
 
     if positive_control is not None and not positive_control.empty:
         for _, r in positive_control.iterrows():
             regime = r.get("budget_regime", "subset")
+            recipe = r.get("recipe", "default")
             ts_note = ""
             if "ts_eu_025" in r and not pd.isna(r.get("ts_eu_025")):
                 ts_note = (
@@ -1280,7 +1408,7 @@ def _write_summary_tables_md(
                     f"-> **{r['ts_status']}**"
                 )
             decision_lines.append(
-                f"- **Experiment 4 Positive Control ({r['architecture']} / {regime} / "
+                f"- **Experiment 4 Positive Control ({r['architecture']} [{recipe}] / {regime} / "
                 f"{r['arm']}, folds {r['shared_folds']})**: "
                 f"EU(25%)={_fmt(r['eu_025'])}, "
                 f"EU(50%)={_fmt(r['eu_050'])}, EU(100%)={_fmt(r['eu_100'])}, "
@@ -1468,9 +1596,11 @@ class PairedAnalysis:
             .set_index("arm")["error_auroc"]
             .to_dict()
         )
+        first_mm = multimodal[min(multimodal)]
         record = {
             "condition": label,
             "architecture": str(_config_value(first, "model.image_encoder.arch")),
+            "recipe": _recipe_id(first_mm.cfg),
             "train_fraction": float(_config_value(first, "data.train_fraction") or 1.0),
             "epochs": int(_config_value(first, "train.epochs") or 0),
             "folds": ",".join(str(fold) for fold in sorted(image)),
@@ -1511,6 +1641,28 @@ class PairedAnalysis:
             "multimodal_mel_recall": metrics["multimodal"].get("mel_recall"),
             "image_mel_specificity": metrics["image"].get("mel_specificity"),
             "multimodal_mel_specificity": metrics["multimodal"].get("mel_specificity"),
+            "image_mel_ovr_auroc": metrics["image"].get("mel_ovr_auroc"),
+            "multimodal_mel_ovr_auroc": metrics["multimodal"].get("mel_ovr_auroc"),
+            "image_scc_ovr_auroc": metrics["image"].get("scc_ovr_auroc"),
+            "multimodal_scc_ovr_auroc": metrics["multimodal"].get("scc_ovr_auroc"),
+            "image_prior_adjusted_balanced_accuracy": metrics["image"].get(
+                "prior_adjusted_balanced_accuracy"
+            ),
+            "multimodal_prior_adjusted_balanced_accuracy": metrics["multimodal"].get(
+                "prior_adjusted_balanced_accuracy"
+            ),
+            "image_prior_adjusted_mel_recall": metrics["image"].get(
+                "prior_adjusted_mel_recall"
+            ),
+            "multimodal_prior_adjusted_mel_recall": metrics["multimodal"].get(
+                "prior_adjusted_mel_recall"
+            ),
+            "image_prior_adjusted_scc_recall": metrics["image"].get(
+                "prior_adjusted_scc_recall"
+            ),
+            "multimodal_prior_adjusted_scc_recall": metrics["multimodal"].get(
+                "prior_adjusted_scc_recall"
+            ),
             "image_macro_ovr_auroc": metrics["image"].get("macro_ovr_auroc"),
             "multimodal_macro_ovr_auroc": metrics["multimodal"].get("macro_ovr_auroc"),
             "image_nll": metrics["image"]["negative_log_likelihood"],

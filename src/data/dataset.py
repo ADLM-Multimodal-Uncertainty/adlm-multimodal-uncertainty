@@ -167,11 +167,21 @@ def build_fold(cfg: DictConfig, split: Split, fold: int) -> FoldData:
         name: preprocessor.transform(clean_features(part, numeric, categorical))
         for name, part in parts.items()
     }
+    if bool(cfg.get("permute_metadata", False)):
+        base_seed = int(cfg.get("permute_metadata_seed", 42))
+        for split_idx, name in enumerate(("train", "val", "test")):
+            rng = np.random.default_rng(base_seed + fold * 10 + split_idx)
+            order = rng.permutation(len(features[name]))
+            features[name] = features[name][order]
 
+    augmentation = str(cfg.get("augmentation", "flip"))
     index = build_image_index(image_dir)
     datasets = {
         name: SkinLesionDataset(
-            parts[name], features[name], index, image_transform(cfg.image_size, name == "train")
+            parts[name],
+            features[name],
+            index,
+            image_transform(cfg.image_size, name == "train", augmentation=augmentation),
         )
         for name in parts
     }

@@ -642,28 +642,46 @@ def plot_cross_setup_learning_curves(all_curves: pd.DataFrame, path: Path) -> No
 
 
 def _train_fraction_series(comparison: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
-    """Build per-(architecture, budget_regime) curves sharing the 100% anchor."""
+    """Build per-(architecture, recipe, budget_regime) curves sharing the 100% anchor."""
     series: list[tuple[str, pd.DataFrame]] = []
     has_regime = "budget_regime" in comparison.columns
-    for architecture, group in comparison.groupby("architecture"):
+    has_recipe = "recipe" in comparison.columns
+    group_cols = ["architecture", "recipe"] if has_recipe else ["architecture"]
+    multi_recipe_archs = (
+        {
+            str(arch)
+            for arch, grp in comparison.groupby("architecture")
+            if grp["recipe"].nunique() > 1
+        }
+        if has_recipe
+        else set()
+    )
+    for key, group in comparison.groupby(group_cols):
+        if has_recipe:
+            architecture, recipe = key
+            base_label = (
+                f"{architecture} [{recipe}]"
+                if str(architecture) in multi_recipe_archs
+                else str(architecture)
+            )
+        else:
+            architecture = key[0] if isinstance(key, tuple) else key
+            base_label = str(architecture)
         if not has_regime:
-            series.append((str(architecture), group.sort_values("train_fraction")))
+            series.append((base_label, group.sort_values("train_fraction")))
             continue
         full = group[np.isclose(group["train_fraction"], 1.0)]
         subsets = group[~np.isclose(group["train_fraction"], 1.0)]
         if subsets.empty:
-            series.append((str(architecture), group.sort_values("train_fraction")))
+            if not full.empty:
+                series.append((base_label, full.sort_values("train_fraction")))
             continue
         regimes = list(dict.fromkeys(subsets["budget_regime"]))
         for regime in regimes:
             sub = pd.concat(
                 [subsets[subsets["budget_regime"] == regime], full], ignore_index=True
             ).sort_values("train_fraction")
-            label = (
-                f"{architecture} ({regime})"
-                if len(regimes) > 1
-                else str(architecture)
-            )
+            label = f"{base_label} ({regime})" if len(regimes) > 1 else base_label
             series.append((label, sub))
     return series
 

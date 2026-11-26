@@ -1,0 +1,21 @@
+epochs: 25
+batch_size: 32
+weighted_loss: false    # proper scoring rule for calibrated EU; use post-hoc prior adjustment for recall
+monitor: val_loss       # minimize validation NLL to avoid overconfident late-epoch checkpoints
+early_stopping_patience: 8
+track_train_metrics: true
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  weight_decay: 0.01
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+  mode: min
+  factor: 0.5
+  patience: 3
+  min_lr: 1.0e-6
+
+loss:
+  _target_: torch.nn.CrossEntropyLoss
