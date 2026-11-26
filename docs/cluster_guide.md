@@ -127,11 +127,12 @@ Templates in `scripts/slurm/`:
 
 ## 5b. Running the Paired EU Experiments on the Cluster
 
-All four `eu_*` presets keep the backbone fully trainable (`freeze=false`), use ImageNet weights,
-AdamW `lr=1e-4`, five ensemble seeds `[0,1,2,3,4]`, and the committed 5-fold patient split.
-Every completed fold saves `best.pt`, `history.csv`, `test_member_predictions.npz` (probabilities
-and raw logits), and `val_member_predictions.npz` (validation logits and probabilities), so all
-downstream calibration, EU measures, and plots run on CPU without retraining.
+The `eu_v2_r18_*` presets keep ResNet18 fully trainable (`freeze=false`), use ImageNet weights,
+`train=eu_v2` (`monitor=val_loss`, `early_stopping_patience=8`, `epochs=25`, `AdamW(lr=1e-4,
+weight_decay=0.01)`, `ReduceLROnPlateau(mode=min, factor=0.5, patience=3)`), `data.augmentation=derm`,
+five ensemble seeds `[0,1,2,3,4]`, and the committed 5-fold patient split. Every completed fold
+saves `best.pt`, `history.csv`, `test_member_predictions.npz`, and `val_member_predictions.npz`,
+so all downstream EU analysis, calibration, and plots run on CPU without retraining.
 
 ### Step 0: Commit, push, pull on `selene`, and run the smoke test
 
@@ -148,91 +149,14 @@ sbatch scripts/slurm/smoke_test.sbatch
 squeue -u $USER
 ```
 
-Wait until `smoke_test` finishes with `COMPLETED` (`sacct -j <jobid>`) and check its log in
-`/vol/miltank/users/$USER/outputs/slurm/`.
+### Core Paired EU Suite (`eu_v2_r18_*`)
 
-### Stage 1: Baseline (ResNet18, all 5 folds)
-
-```bash
-sbatch scripts/slurm/fold_ensemble_array.sbatch experiment=eu_baseline_r18_image_only
-sbatch scripts/slurm/fold_ensemble_array.sbatch experiment=eu_baseline_r18_multimodal
-```
-
-### Stage 2: Experiment 6 (ResNet50, screen on folds 0-1 first)
+Step-matched positive-control max budgets are `epochs=50` (50%) and `epochs=100` (25%); early
+stopping halts each member after validation loss stops improving. `src/analysis.py` isolates
+recipes automatically and pairs `eu_v2_r18_permuted_multimodal` with `eu_v2_r18_image_only`:
 
 ```bash
-sbatch --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch experiment=eu_resnet50_image_only
-sbatch --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch experiment=eu_resnet50_multimodal
-```
-
-Run the CPU-only analysis to check the Experiment 6 decision rule in `summary_tables.md`:
-
-```bash
-sbatch scripts/slurm/analyze.sbatch
-```
-
-Expand ResNet50 to folds 2-4 **only if** `summary_tables.md` flags a dEU sign/CI shift or a
-balanced-accuracy change > 2 percentage points:
-
-```bash
-sbatch --array=2-4%2 scripts/slurm/fold_ensemble_array.sbatch experiment=eu_resnet50_image_only
-sbatch --array=2-4%2 scripts/slurm/fold_ensemble_array.sbatch experiment=eu_resnet50_multimodal
-```
-
-### Stage 3: Experiment 4 (Positive control: 25% and 50% training patients, reusing 100%)
-
-Use the chosen encoder from Stage 2 (`eu_baseline_r18_*` if keeping ResNet18, or `eu_resnet50_*`
-if switching to ResNet50). Always pass a distinct `name=...` so fractions do not overwrite the
-100% baseline runs:
-
-```bash
-# Example with ResNet18 (swap experiment=... and r18 -> r50 if ResNet50 won Stage 2):
-sbatch --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
-  experiment=eu_baseline_r18_image_only data.train_fraction=0.25 name=eu_size_r18_f025_image_only
-sbatch --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
-  experiment=eu_baseline_r18_multimodal data.train_fraction=0.25 name=eu_size_r18_f025_multimodal
-sbatch --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
-  experiment=eu_baseline_r18_image_only data.train_fraction=0.5 name=eu_size_r18_f050_image_only
-sbatch --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
-  experiment=eu_baseline_r18_multimodal data.train_fraction=0.5 name=eu_size_r18_f050_multimodal
-```
-
-Run the CPU-only analysis again (`sbatch scripts/slurm/analyze.sbatch`) and check
-`positive_control_summary.csv` and `summary_tables.md` (which report both raw MI EU and
-post-hoc validation temperature-scaled MI EU).
-
-Because fixed-epoch subsets (`epochs=10`) take 2-4x fewer gradient updates than the 100% baseline
-and can under-diverge pretrained ensemble members, you can also run a **step-matched** positive
-control (matching gradient updates via `train.epochs=40` at 25% and `train.epochs=20` at 50%);
-`src/analysis.py` automatically separates `fixed_epochs` and `step_matched` regimes against the
-shared 100% anchor:
-
-```bash
-sbatch --partition=universe --qos=master-queuesave --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
-  experiment=eu_baseline_r18_image_only data.train_fraction=0.25 train.epochs=40 name=eu_size_r18_step_f025_image_only
-sbatch --partition=universe --qos=master-queuesave --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
-  experiment=eu_baseline_r18_multimodal data.train_fraction=0.25 train.epochs=40 name=eu_size_r18_step_f025_multimodal
-sbatch --partition=universe --qos=master-queuesave --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
-  experiment=eu_baseline_r18_image_only data.train_fraction=0.5 train.epochs=20 name=eu_size_r18_step_f050_image_only
-sbatch --partition=universe --qos=master-queuesave --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
-  experiment=eu_baseline_r18_multimodal data.train_fraction=0.5 train.epochs=20 name=eu_size_r18_step_f050_multimodal
-```
-
-If EU does not decrease monotonically or the 25%-vs-100% patient bootstrap CI includes 0 (and is
-not clearly inverted), expand folds 2-4 with `--array=2-4%2` using the exact same `name=...`
-overrides, then run `sbatch scripts/slurm/analyze.sbatch` one final time.
-
-### Stage 4: `eu_v2` Calibrated ResNet18 Suite (`val_loss` + early stopping + `derm` aug + LR decay)
-
-`eu_v2_r18_*` uses `train=eu_v2` (`monitor=val_loss`, `early_stopping_patience=8`, `epochs=25`,
-`AdamW(lr=1e-4, weight_decay=0.01)`, `ReduceLROnPlateau(mode=min, factor=0.5, patience=3)`),
-`data.augmentation=derm`, and full ResNet18 fine-tuning. Step-matched positive-control max budgets
-are `epochs=50` (50%) and `epochs=100` (25%); early stopping halts each member after validation
-loss stops improving. `src/analysis.py` isolates v1 and v2 recipes automatically and pairs
-`eu_v2_r18_permuted_multimodal` with `eu_v2_r18_image_only`:
-
-```bash
-# Main v2 comparison (100%, 5 folds) + permuted-metadata negative control (folds 0-1 screen):
+# Main paired comparison (100%, 5 folds) + permuted-metadata negative control (folds 0-1):
 sbatch --partition=universe --qos=master-queuesave --array=0-4%2 scripts/slurm/fold_ensemble_array.sbatch \
   experiment=eu_v2_r18_image_only
 sbatch --partition=universe --qos=master-queuesave --array=0-4%2 scripts/slurm/fold_ensemble_array.sbatch \
@@ -240,7 +164,7 @@ sbatch --partition=universe --qos=master-queuesave --array=0-4%2 scripts/slurm/f
 sbatch --partition=universe --qos=master-queuesave --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
   experiment=eu_v2_r18_permuted_multimodal
 
-# Step-matched positive control under the same v2 recipe (folds 0-1 screen):
+# Step-matched positive control under the same v2 recipe (folds 0-1):
 sbatch --partition=universe --qos=master-queuesave --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
   experiment=eu_v2_r18_image_only data.train_fraction=0.5 train.epochs=50 name=eu_v2_r18_f050_image_only
 sbatch --partition=universe --qos=master-queuesave --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
@@ -249,6 +173,9 @@ sbatch --partition=universe --qos=master-queuesave --array=0-1%2 scripts/slurm/f
   experiment=eu_v2_r18_image_only data.train_fraction=0.25 train.epochs=100 name=eu_v2_r18_f025_image_only
 sbatch --partition=universe --qos=master-queuesave --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch \
   experiment=eu_v2_r18_multimodal data.train_fraction=0.25 train.epochs=100 name=eu_v2_r18_f025_multimodal
+
+# CPU-only analysis once runs complete:
+sbatch --partition=universe --qos=master-queuesave scripts/slurm/analyze.sbatch
 ```
 
 ### Pull lightweight analysis tables and plots back to your laptop

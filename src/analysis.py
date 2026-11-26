@@ -34,7 +34,7 @@ from src.analysis_plots import (
     plot_training_curves,
     plot_uncertainty,
 )
-from src.metrics import detailed_metrics, summary_metrics
+from src.metrics import detailed_metrics
 from src.uq.deep_ensemble import uncertainty
 
 log = logging.getLogger(__name__)
@@ -446,15 +446,6 @@ def _fold_frame(
         )
         frame["image_mean_temp"] = float(img_temps.mean())
         frame["multimodal_mean_temp"] = float(mm_temps.mean())
-    if image.val_labels is not None and len(image.val_labels) > 0:
-        counts = np.bincount(image.val_labels, minlength=len(classes)).astype(float)
-        if (counts == 0).any():
-            counts += 1.0
-        val_prior = counts / counts.sum()
-        frame["image_prior_adjusted_pred"] = (image_mean / val_prior[None, :]).argmax(axis=1)
-        frame["multimodal_prior_adjusted_pred"] = (
-            multimodal_mean / val_prior[None, :]
-        ).argmax(axis=1)
     for index, name in enumerate(classes):
         frame[f"image_p_{name}"] = image_mean[:, index]
         frame[f"multimodal_p_{name}"] = multimodal_mean[:, index]
@@ -542,21 +533,7 @@ def summarize_uncertainty(
 def _classification_metrics(frame: pd.DataFrame, arm: str, classes: list[str]) -> dict:
     labels = frame["label"].to_numpy()
     probs = frame[[f"{arm}_p_{name}" for name in classes]].to_numpy()
-    metrics = detailed_metrics(labels, probs.argmax(axis=1), classes, probs)
-    pa_col = f"{arm}_prior_adjusted_pred"
-    if pa_col in frame.columns and frame[pa_col].notna().all():
-        pa_preds = frame[pa_col].to_numpy(dtype=int)
-        pa_summary = summary_metrics(labels, pa_preds, len(classes))
-        metrics["prior_adjusted_balanced_accuracy"] = pa_summary["balanced_accuracy"]
-        metrics["prior_adjusted_macro_f1"] = pa_summary["macro_f1"]
-        for cls_name in ("MEL", "SCC"):
-            if cls_name in classes:
-                cls_idx = classes.index(cls_name)
-                mask = labels == cls_idx
-                metrics[f"prior_adjusted_{cls_name.lower()}_recall"] = (
-                    float((pa_preds[mask] == cls_idx).mean()) if mask.any() else None
-                )
-    return metrics
+    return detailed_metrics(labels, probs.argmax(axis=1), classes, probs)
 
 
 def _error_detection_summary(frame: pd.DataFrame) -> pd.DataFrame:
@@ -1189,45 +1166,6 @@ def _write_summary_tables_md(
                 + _markdown_table(ts_headers, ts_rows)
             )
 
-    if (
-        "image_prior_adjusted_balanced_accuracy" in comparison.columns
-        and comparison["image_prior_adjusted_balanced_accuracy"].notna().any()
-    ):
-        pa_headers = [
-            "Condition",
-            "Recipe",
-            "Arm",
-            "Raw BalAcc",
-            "PA BalAcc",
-            "Raw MEL Rec",
-            "PA MEL Rec",
-            "MEL AUROC",
-            "SCC AUROC",
-        ]
-        pa_rows: list[list[str]] = []
-        for _, r in comparison.iterrows():
-            if pd.isna(r.get("image_prior_adjusted_balanced_accuracy")):
-                continue
-            for arm in ("image", "multimodal"):
-                pa_rows.append(
-                    [
-                        str(r["condition"]),
-                        str(r.get("recipe", "default")),
-                        arm,
-                        _fmt(r.get(f"{arm}_balanced_accuracy"), 3),
-                        _fmt(r.get(f"{arm}_prior_adjusted_balanced_accuracy"), 3),
-                        _fmt(r.get(f"{arm}_mel_recall"), 3),
-                        _fmt(r.get(f"{arm}_prior_adjusted_mel_recall"), 3),
-                        _fmt(r.get(f"{arm}_mel_ovr_auroc"), 3),
-                        _fmt(r.get(f"{arm}_scc_ovr_auroc"), 3),
-                    ]
-                )
-        if pa_rows:
-            sections.append(
-                "## 1c. Class-Imbalance Diagnostics (Post-Hoc Prior Adjustment & OvR AUROC)\n\n"
-                + _markdown_table(pa_headers, pa_rows)
-            )
-
     fold_headers = [
         "Condition",
         "Fold",
@@ -1641,28 +1579,6 @@ class PairedAnalysis:
             "multimodal_mel_recall": metrics["multimodal"].get("mel_recall"),
             "image_mel_specificity": metrics["image"].get("mel_specificity"),
             "multimodal_mel_specificity": metrics["multimodal"].get("mel_specificity"),
-            "image_mel_ovr_auroc": metrics["image"].get("mel_ovr_auroc"),
-            "multimodal_mel_ovr_auroc": metrics["multimodal"].get("mel_ovr_auroc"),
-            "image_scc_ovr_auroc": metrics["image"].get("scc_ovr_auroc"),
-            "multimodal_scc_ovr_auroc": metrics["multimodal"].get("scc_ovr_auroc"),
-            "image_prior_adjusted_balanced_accuracy": metrics["image"].get(
-                "prior_adjusted_balanced_accuracy"
-            ),
-            "multimodal_prior_adjusted_balanced_accuracy": metrics["multimodal"].get(
-                "prior_adjusted_balanced_accuracy"
-            ),
-            "image_prior_adjusted_mel_recall": metrics["image"].get(
-                "prior_adjusted_mel_recall"
-            ),
-            "multimodal_prior_adjusted_mel_recall": metrics["multimodal"].get(
-                "prior_adjusted_mel_recall"
-            ),
-            "image_prior_adjusted_scc_recall": metrics["image"].get(
-                "prior_adjusted_scc_recall"
-            ),
-            "multimodal_prior_adjusted_scc_recall": metrics["multimodal"].get(
-                "prior_adjusted_scc_recall"
-            ),
             "image_macro_ovr_auroc": metrics["image"].get("macro_ovr_auroc"),
             "multimodal_macro_ovr_auroc": metrics["multimodal"].get("macro_ovr_auroc"),
             "image_nll": metrics["image"]["negative_log_likelihood"],

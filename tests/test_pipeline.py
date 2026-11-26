@@ -161,4 +161,4 @@ def test_eu_v2_training_supports_val_loss_scheduler_early_stopping_and_derm_aug(
     assert 1 <= len(history) <= 4
     assert (run_dir / "best.pt").exists()
     metrics = json.loads((run_dir / "test_metrics.json").read_text())
-    assert "per_class_ovr_auroc" in metrics
+    assert 0.0 <= metrics["balanced_accuracy"] <= 1.0

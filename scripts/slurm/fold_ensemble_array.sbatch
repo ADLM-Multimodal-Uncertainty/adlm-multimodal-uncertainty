@@ -16,9 +16,9 @@
 # %2 respects master-queuesave's limit of at most 2 concurrent non-interruptible jobs per user.
 #
 # Examples:
-#   sbatch scripts/slurm/fold_ensemble_array.sbatch experiment=eu_baseline_r18_image_only
-#   sbatch --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch experiment=eu_resnet50_multimodal
-#   sbatch --array=2-4%2 scripts/slurm/fold_ensemble_array.sbatch experiment=eu_resnet50_multimodal
+#   sbatch scripts/slurm/fold_ensemble_array.sbatch experiment=eu_v2_r18_image_only
+#   sbatch --array=0-1%2 scripts/slurm/fold_ensemble_array.sbatch experiment=eu_v2_r18_multimodal
+#   sbatch --array=2-4%2 scripts/slurm/fold_ensemble_array.sbatch experiment=eu_v2_r18_multimodal
 set -euo pipefail
 
 CACHE_BASE="/meta/users/$USER/.cache"

@@ -11,7 +11,7 @@
 #SBATCH --cpus-per-task=6
 #SBATCH --mem=24G
 
-# Usage: sbatch scripts/slurm/train.sbatch experiment=eu_baseline_r18_multimodal fold=0
+# Usage: sbatch scripts/slurm/train.sbatch experiment=eu_v2_r18_multimodal fold=0
 set -euo pipefail
 
 CACHE_BASE="/meta/users/$USER/.cache"

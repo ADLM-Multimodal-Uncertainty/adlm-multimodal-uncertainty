@@ -114,27 +114,6 @@ def test_default_patient_folds_and_backbone_training():
 
 
 @pytest.mark.parametrize(
-    ("experiment", "architecture", "uses_metadata"),
-    [
-        ("eu_baseline_r18_multimodal", "resnet18", True),
-        ("eu_baseline_r18_image_only", "resnet18", False),
-        ("eu_resnet50_multimodal", "resnet50", True),
-        ("eu_resnet50_image_only", "resnet50", False),
-    ],
-)
-def test_eu_experiment_presets_fully_fine_tune_five_member_ensembles(
-    experiment, architecture, uses_metadata
-):
-    cfg = _compose([f"experiment={experiment}"])
-    assert cfg.split.n_folds == 5
-    assert cfg.model.image_encoder.arch == architecture
-    assert cfg.model.image_encoder.freeze is False
-    assert cfg.train.optimizer.lr == pytest.approx(1e-4)
-    assert list(cfg.ensemble.seeds) == [0, 1, 2, 3, 4]
-    assert (cfg.model.get("tabular_encoder") is not None) is uses_metadata
-
-
-@pytest.mark.parametrize(
     ("experiment", "uses_metadata", "permute_metadata"),
     [
         ("eu_v2_r18_image_only", False, False),

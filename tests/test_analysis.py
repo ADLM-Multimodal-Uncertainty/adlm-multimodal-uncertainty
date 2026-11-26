@@ -449,7 +449,6 @@ def test_recipe_isolation_and_permuted_metadata_auto_pairing(tmp_path):
 
     comp = pd.read_csv(output / "condition_comparison.csv")
     assert "eu_v2_r18_permuted" in set(comp["condition"])
-    assert comp["image_prior_adjusted_balanced_accuracy"].notna().all()
 
     pos = pd.read_csv(output / "positive_control_summary.csv")
     v1_pos = pos[pos["recipe"] == "val_macro_f1|flip"]

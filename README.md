@@ -135,7 +135,7 @@ Training curves and confusion matrix plots remain in each member directory.
 
 ## Paired EU experiments
 
-The `eu_v2_r18_*` presets are the calibrated ResNet18 setup (`train=eu_v2`: `monitor=val_loss`,
+The `eu_v2_r18_*` presets are the paired ResNet18 setup (`train=eu_v2`: `monitor=val_loss`,
 `early_stopping_patience=8`, `epochs=25`, `AdamW(lr=1e-4, weight_decay=0.01)`,
 `ReduceLROnPlateau(mode=min, factor=0.5, patience=3, min_lr=1e-6)`, `data.augmentation=derm`,
 full backbone fine-tuning, five ensemble seeds `[0, 1, 2, 3, 4]`, committed 5-fold patient split):
@@ -146,30 +146,16 @@ scripts/local/run.sh -m experiment=eu_v2_r18_multimodal
 scripts/local/run.sh -m experiment=eu_v2_r18_permuted_multimodal   # negative control
 ```
 
-The earlier v1 `eu_baseline_r18_*` and `eu_resnet50_*` presets (`monitor=val_macro_f1`,
-`data.augmentation=flip`, 10 epochs) remain unchanged for comparison:
-
-```bash
-scripts/local/run.sh -m experiment=eu_baseline_r18_image_only
-scripts/local/run.sh -m experiment=eu_baseline_r18_multimodal
-```
-
-Screen ResNet50 on two of the same five rotations:
-
-```bash
-scripts/local/run.sh -m experiment=eu_resnet50_image_only fold=0,1
-scripts/local/run.sh -m experiment=eu_resnet50_multimodal fold=0,1
-```
-
 The training-size positive control selects nested, diagnosis-stratified subsets of training
-patients while leaving validation and test unchanged. Always change `name` so fractions do not
-overwrite the full-data runs:
+patients while leaving validation and test unchanged (step-matched max epochs: `50` at 50%,
+`100` at 25%, with early stopping). Always change `name` so fractions do not overwrite the
+full-data runs:
 
 ```bash
-scripts/local/run.sh -m experiment=eu_baseline_r18_image_only fold=0,1 \
-  data.train_fraction=0.25 name=eu_size_r18_f025_image_only
-scripts/local/run.sh -m experiment=eu_baseline_r18_multimodal fold=0,1 \
-  data.train_fraction=0.25 name=eu_size_r18_f025_multimodal
+scripts/local/run.sh -m experiment=eu_v2_r18_image_only fold=0,1 \
+  data.train_fraction=0.25 train.epochs=100 name=eu_v2_r18_f025_image_only
+scripts/local/run.sh -m experiment=eu_v2_r18_multimodal fold=0,1 \
+  data.train_fraction=0.25 train.epochs=100 name=eu_v2_r18_f025_multimodal
 ```
 
 Use `0.5` for the half-data condition and reuse the matching full-data artifacts. The supported

@@ -121,17 +121,4 @@ def detailed_metrics(
         metrics["mel_specificity"] = specificity["MEL"]
     if probs is not None:
         metrics.update(probability_metrics(labels, probs, len(classes)))
-        per_class_auroc: dict[str, float | None] = {}
-        for index, name in enumerate(classes):
-            binary = (labels == index).astype(int)
-            per_class_auroc[name] = (
-                float(roc_auc_score(binary, probs[:, index]))
-                if len(np.unique(binary)) == 2
-                else None
-            )
-        metrics["per_class_ovr_auroc"] = per_class_auroc
-        if "MEL" in per_class_auroc:
-            metrics["mel_ovr_auroc"] = per_class_auroc["MEL"]
-        if "SCC" in per_class_auroc:
-            metrics["scc_ovr_auroc"] = per_class_auroc["SCC"]
     return metrics

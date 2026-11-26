@@ -58,7 +58,7 @@ resolve_data_dir() {
 if RESOLVED_DATA="$(resolve_data_dir)"; then
     echo "running 1-epoch CUDA smoke training with data.root=$RESOLVED_DATA"
     "$PYTHON" -m src.train \
-        experiment=eu_baseline_r18_multimodal \
+        experiment=eu_v2_r18_multimodal \
         '~ensemble' \
         name=cluster_smoke \
         output_root="$OUTPUT_ROOT/smoke" \
