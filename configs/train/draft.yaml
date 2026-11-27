@@ -1,6 +1,7 @@
 epochs: 10
 batch_size: 32
 weighted_loss: false    # inverse-frequency class weights
+balanced_sampler: false # draw training images with probability 1 / class count (with replacement)
 monitor: val_macro_f1   # val_accuracy | val_balanced_accuracy | val_macro_f1
 track_train_metrics: true   # score the training set in eval mode each epoch (one extra pass)
 

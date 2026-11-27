@@ -77,10 +77,12 @@ def evaluate_run(run_dir: Path, device: torch.device) -> dict:
     model.load_state_dict(state["state_dict"])
     model.to(device).eval()
 
-    loader = DataLoader(
-        data.test, batch_size=cfg.train.batch_size, num_workers=cfg.data.num_workers
-    )
-    prediction = predict(model, loader, device)
+    def loader(dataset):
+        return DataLoader(
+            dataset, batch_size=cfg.train.batch_size, num_workers=cfg.data.num_workers
+        )
+
+    prediction = predict(model, loader(data.test), device)
     probs, labels = prediction.probs, prediction.labels
     preds = probs.argmax(axis=1)
     test_df = data.test.df
@@ -91,13 +93,21 @@ def evaluate_run(run_dir: Path, device: torch.device) -> dict:
         "n_patients": int(test_df["patient_id"].nunique()),
     }
     (run_dir / "test_metrics.json").write_text(json.dumps(metrics, indent=2))
+    predictions_frame(test_df, probs).to_csv(run_dir / "test_predictions.csv", index=False)
 
-    predictions = test_df[["patient_id", "img_id", "diagnostic"]].copy()
-    predictions["predicted"] = [CLASSES[i] for i in preds]
+    # Validation probabilities of the selected checkpoint, for post-hoc calibration
+    # (temperature scaling in src.analysis). Not used for any reported test metric.
+    val_probs = predict(model, loader(data.val), device).probs
+    predictions_frame(data.val.df, val_probs).to_csv(run_dir / "val_predictions.csv", index=False)
+    return metrics
+
+
+def predictions_frame(df, probs: np.ndarray):
+    predictions = df[["patient_id", "img_id", "diagnostic"]].copy().reset_index(drop=True)
+    predictions["predicted"] = [CLASSES[i] for i in probs.argmax(axis=1)]
     for k, name in enumerate(CLASSES):
         predictions[f"p_{name}"] = probs[:, k]
-    predictions.to_csv(run_dir / "test_predictions.csv", index=False)
-    return metrics
+    return predictions
 
 
 def main() -> None:

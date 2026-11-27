@@ -1,0 +1,10 @@
+# @package _global_
+# Deep ensemble, image + metadata, focal loss (gamma = 2) instead of cross-entropy.
+defaults:
+  - deep_ensemble
+
+name: deep_ensemble_focal
+train:
+  loss:
+    _target_: src.losses.FocalLoss
+    gamma: 2.0

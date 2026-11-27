@@ -63,7 +63,8 @@ Current: every image is one sample; metrics are per image.
 ### A3. Role of the validation set
 Current: checkpoint selection only (best epoch by `train.monitor`).
 - Checkpoint selection: **Current**
-- Also fit calibration (temperature scaling) on validation: **Not implemented**
+- Also fit calibration (temperature scaling) on validation: **Available**, post hoc in
+  `src.analysis` (one temperature per ensemble member and fold, from `val_member_predictions.npz`)
 - Also tune decision thresholds on validation: **Not implemented**
 
 ### A4. Test-set discipline
@@ -162,12 +163,14 @@ Current: random horizontal flip only, hard-coded in `src/data/transforms.py` (no
 - Label smoothing (`+train.loss.label_smoothing=0.1`; the `+` adds a key the YAML does not
   list): **Available**
 - Softened (square-root) class weights: **Not implemented**
-- Focal loss: **Not implemented**
+- Focal loss, gamma = 2 (`experiment=deep_ensemble_focal` / `deep_ensemble_image_only_focal`):
+  **Available**
 - Class-balanced loss (effective number of samples), LDAM: **Not implemented**
 
 ### D2. Sampling
 - Plain shuffling: **Current**
-- Oversampling with a weighted random sampler: **Not implemented**
+- Oversampling with a weighted random sampler, probability 1 / class count
+  (`train.balanced_sampler=true`): **Available**
 - Undersampling of majority classes: **Not implemented**
 - Class-balanced batches: **Not implemented**
 

@@ -81,4 +81,26 @@ def evaluate_ensemble(run_dir: Path, device: torch.device) -> dict:
         classes=np.asarray(CLASSES), seeds=np.asarray(ensemble.seeds),
     )
     (run_dir / "test_metrics.json").write_text(json.dumps(metrics, indent=2))
+    save_validation_predictions(run_dir, ensemble.seeds, columns)
     return metrics
+
+
+def save_validation_predictions(run_dir: Path, seeds: list[int], columns: list[str]) -> None:
+    """`val_member_predictions.npz`, same fields as the test file, for post-hoc calibration."""
+    frames = [
+        pd.read_csv(run_dir / "members" / f"seed_{seed}" / "val_predictions.csv",
+                    dtype={"patient_id": str, "img_id": str})
+        for seed in seeds
+    ]
+    keys = ["patient_id", "img_id", "diagnostic"]
+    if any(not frame[keys].equals(frames[0][keys]) for frame in frames[1:]):
+        raise ValueError("ensemble members must use identical ordered validation samples")
+    first = frames[0]
+    np.savez_compressed(
+        run_dir / "val_member_predictions.npz",
+        probabilities=np.stack([frame[columns].to_numpy() for frame in frames]),
+        labels=first["diagnostic"].map(CLASSES.index).to_numpy(),
+        img_ids=first.img_id.to_numpy(dtype=str),
+        patient_ids=first.patient_id.to_numpy(dtype=str),
+        classes=np.asarray(CLASSES), seeds=np.asarray(seeds),
+    )

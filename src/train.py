@@ -22,7 +22,7 @@ import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 from torch import nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from src import CLASSES
 from src.data.dataset import build_fold
@@ -45,6 +45,17 @@ def class_weights(labels: np.ndarray, device: torch.device) -> torch.Tensor:
     if (counts == 0).any():
         raise ValueError("weighted_loss needs every class in the training partition")
     return torch.tensor(len(labels) / (len(CLASSES) * counts), dtype=torch.float32, device=device)
+
+
+def balanced_sampler(labels: np.ndarray, seed: int) -> WeightedRandomSampler:
+    """Draw len(labels) images per epoch with replacement, each with probability proportional
+    to 1 / count of its class, so every class is drawn equally often in expectation."""
+    counts = np.bincount(labels, minlength=len(CLASSES))
+    if (counts == 0).any():
+        raise ValueError("balanced_sampler needs every class in the training partition")
+    weights = torch.as_tensor(1.0 / counts[labels], dtype=torch.double)
+    generator = torch.Generator().manual_seed(seed)
+    return WeightedRandomSampler(weights, len(labels), replacement=True, generator=generator)
 
 
 def score(prediction: Predictions, prefix: str) -> dict[str, float]:
@@ -83,8 +94,13 @@ def train_run(cfg: DictConfig) -> None:
 
     data = build_fold(cfg.data, instantiate(cfg.split), cfg.fold)
     model = build_model(cfg.model, len(CLASSES), data.n_meta_features).to(device)
+    sampler = (
+        balanced_sampler(data.train.labels, cfg.seed)
+        if cfg.train.get("balanced_sampler", False) else None
+    )
     train_loader = DataLoader(
-        data.train, batch_size=cfg.train.batch_size, shuffle=True, num_workers=cfg.data.num_workers
+        data.train, batch_size=cfg.train.batch_size, shuffle=sampler is None, sampler=sampler,
+        num_workers=cfg.data.num_workers,
     )
     val_loader = DataLoader(
         data.val, batch_size=cfg.train.batch_size, num_workers=cfg.data.num_workers

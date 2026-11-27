@@ -133,6 +133,75 @@ Load it with `numpy.load(path, allow_pickle=False)`. Re-evaluation uses each mem
 config and checkpoint and regenerates the aggregate artifacts; it requires the original data.
 Training curves and confusion matrix plots remain in each member directory.
 
+## Class imbalance strategies (experiment 2.2)
+
+Train both arms with each strategy; everything else stays at the reference. All four use
+`train.monitor=val_macro_f1`, five members and the two patient folds:
+
+| Strategy | Image + metadata | Image only |
+|---|---|---|
+| Unweighted cross-entropy (reference) | `experiment=deep_ensemble` | `experiment=deep_ensemble_image_only` |
+| Class-weighted cross-entropy | `... train.weighted_loss=true` | `... train.weighted_loss=true` |
+| Focal loss, gamma = 2 | `experiment=deep_ensemble_focal` | `experiment=deep_ensemble_image_only_focal` |
+| Class-balanced sampler | `... train.balanced_sampler=true` | `... train.balanced_sampler=true` |
+
+```bash
+sbatch scripts/slurm/train.sbatch -m experiment=deep_ensemble_focal split=patient_kfold fold=0,1 \
+  data.num_workers=8 name=exp22_mm_focal
+sbatch scripts/slurm/train.sbatch -m experiment=deep_ensemble split=patient_kfold fold=0,1 \
+  data.num_workers=8 train.balanced_sampler=true name=exp22_mm_sampler
+```
+
+`FocalLoss` (`src/losses.py`) reduces to cross-entropy at `gamma=0` and combines with
+`train.weighted_loss=true`. The sampler draws as many images per epoch as the training set
+holds, with replacement, each with probability proportional to 1 / its class count, from a
+generator seeded with the run seed.
+
+Every run also writes the validation probabilities of its selected checkpoint
+(`val_predictions.csv`; ensembles: `val_member_predictions.npz`), used only for temperature
+scaling in the analysis below. Runs trained before this existed get them by re-evaluation,
+without retraining (needs the data, so run it as a job):
+`uv run python -m src.evaluate outputs/runs/<ensemble run dir>`.
+
+## ΔEU analysis
+
+Compare an image-only and an image + metadata ensemble after both finished, by their `name=`
+values (`<image-only>:<multimodal>`, one pair per strategy). Needs only the saved outputs,
+no data, GPU or retraining:
+
+```bash
+uv run python -m src.analysis exp11_img:exp11_mm exp22_img_wl:exp22_mm_wl \
+  exp22_img_focal:exp22_mm_focal exp22_img_sampler:exp22_mm_sampler
+```
+
+All folds found under `--runs-root` (default `outputs/runs`) are pooled, so with k-fold
+splits every image is scored once per arm. The script recomputes everything from
+`test_member_predictions.npz` and stops if it disagrees with the saved `test_metrics.json` or
+`test_predictions.csv`, or if the arms differ in split, seed, folds or test images.
+
+Temperature scaling: if every fold of both arms has `val_member_predictions.npz`, each member
+gets one temperature per fold, fitted on that fold's validation set by minimum negative
+log-likelihood and applied to its test probabilities. Every number is then reported both
+uncalibrated and after scaling; otherwise the report says scaling was skipped.
+
+Per pair it writes `outputs/analysis/<image-only>_vs_<multimodal>/`:
+
+- `summary.md`: accuracy, balanced accuracy, macro-F1 (pooled, per fold, mean single
+  member), per-class recall, top-label ECE (15 bins), mean total / aleatoric / epistemic
+  uncertainty, mean EU per class, and ΔEU = EU(image only) − EU(image + metadata) overall
+  and per class; once uncalibrated and once after temperature scaling. Positive ΔEU means
+  the metadata lowered the epistemic uncertainty. Intervals are 95 % percentile intervals
+  from 2000 bootstrap resamples of **patients** (`--n-boot`, `--seed`), also for the
+  multimodal − image-only differences in balanced accuracy, macro-F1 and accuracy.
+- `summary.json`: the same numbers, machine-readable, plus the fitted temperatures.
+- `per_image.csv`: one row per test image with fold, label, both predictions, class
+  probabilities and all three uncertainties of both arms, and `delta_epistemic`; columns
+  ending in `_ts` hold the same after temperature scaling.
+
+`outputs/analysis/report.md` starts with an overview table, one row per pair: balanced
+accuracy, macro-F1, MEL recall, ECE before → after scaling, ΔEU before and after scaling,
+and whether the ΔEU interval lies above zero, below zero or includes it.
+
 ## Freeze or fine-tune ResNet18
 
 Toggle `model.image_encoder.freeze` in any experiment. The default is `false`:
