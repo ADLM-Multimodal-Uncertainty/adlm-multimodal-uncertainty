@@ -19,6 +19,7 @@ from src.analysis.effects import (
 )
 from src.analysis.figures import (
     plot_confusion_matrices,
+    plot_deu_candles,
     plot_deu_distribution,
     plot_effect_estimates,
     plot_paired_eu_scatter,
@@ -468,19 +469,82 @@ def _git_revision() -> str:
         return "unknown"
 
 
+def _cell(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (bool, np.bool_)):
+        return str(value)
+    if isinstance(value, (int, np.integer)):
+        return str(int(value))
+    if isinstance(value, float):
+        return f"{value:.4f}" if np.isfinite(value) else ""
+    if value is None or pd.isna(value):
+        return ""
+    return str(value)
+
+
 def _markdown_table(frame: pd.DataFrame, columns: list[str] | None = None) -> str:
     selected = frame if columns is None else frame[columns]
-    headers = list(selected.columns)
+    return _markdown_rows(list(selected.columns), selected.itertuples(index=False, name=None))
+
+
+def _markdown_rows(headers: list[str], rows) -> str:
     lines = ["| " + " | ".join(headers) + " |", "| " + " | ".join("---" for _ in headers) + " |"]
-    for _, row in selected.iterrows():
-        cells = []
-        for value in row:
-            if isinstance(value, float):
-                cells.append(f"{value:.4f}" if np.isfinite(value) else "")
-            else:
-                cells.append("" if pd.isna(value) else str(value))
-        lines.append("| " + " | ".join(cells) + " |")
+    for row in rows:
+        lines.append("| " + " | ".join(_cell(value) for value in row) + " |")
     return "\n".join(lines)
+
+
+def _paired_effects_markdown(effects: pd.DataFrame) -> str:
+    """One narrow block per comparison. The wide CSV keeps the full column names."""
+    quantities = (
+        ("total_uncertainty", "Total"),
+        ("aleatoric_uncertainty", "Aleatoric"),
+        ("epistemic_uncertainty", "Epistemic"),
+    )
+    blocks = []
+    for record in effects.to_dict(orient="records"):
+        uncertainty_rows = [
+            [
+                label,
+                record[f"mean_{key}_reduction_nats"],
+                record[f"median_{key}_reduction_nats"],
+                record[f"relative_{key}_reduction_pct"],
+                record[f"share_{key}_reduced_pct"],
+            ]
+            for key, label in quantities
+        ]
+        blocks.append(
+            "\n".join(
+                [
+                    f"### {record['comparison']}",
+                    "",
+                    _markdown_rows(
+                        ["Images", "Patients", "Δ bal. acc. (pp)", "Δ macro-F1 (pp)"],
+                        [
+                            [
+                                record["paired_images"],
+                                record["paired_patients"],
+                                record["delta_balanced_accuracy_pp"],
+                                record["delta_macro_f1_pp"],
+                            ]
+                        ],
+                    ),
+                    "",
+                    _markdown_rows(
+                        [
+                            "Uncertainty",
+                            "Mean (nats)",
+                            "Median (nats)",
+                            "Relative (%)",
+                            "Share reduced (%)",
+                        ],
+                        uncertainty_rows,
+                    ),
+                ]
+            )
+        )
+    return "\n\n".join(blocks)
 
 
 def _write_report(
@@ -534,7 +598,11 @@ def _write_report(
         "",
         "## Paired effects",
         "",
-        _markdown_table(effects),
+        "Each comparison is two narrow tables. "
+        "The classification row is candidate minus reference, in percentage points. "
+        "The uncertainty rows are reference minus candidate.",
+        "",
+        _paired_effects_markdown(effects),
         "",
         "## Figures",
         "",
@@ -711,9 +779,11 @@ def run_analysis(cfg: DictConfig) -> Path:
         frame = paired[comparison.comparison_id]
         scatter_name = f"paired_eu_scatter_{comparison.comparison_id}.png"
         distribution_name = f"paired_deu_distribution_{comparison.comparison_id}.png"
+        candles_name = f"paired_deu_candles_{comparison.comparison_id}.png"
         plot_paired_eu_scatter(frame, comparison.name, badge, output / "figures" / scatter_name)
         plot_deu_distribution(frame, comparison.name, badge, output / "figures" / distribution_name)
-        figure_names.extend([scatter_name, distribution_name])
+        plot_deu_candles(frame, comparison.name, badge, output / "figures" / candles_name)
+        figure_names.extend([scatter_name, distribution_name, candles_name])
     plot_confusion_matrices(
         [(condition.label, _confusion(condition)) for condition in conditions],
         list(CLASSES),

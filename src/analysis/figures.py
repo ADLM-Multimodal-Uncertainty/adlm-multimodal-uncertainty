@@ -1,7 +1,7 @@
 """Figures for one result-analysis directory.
 
-F1 and F2 are written once per comparison. F3, F4, and F6 summarize the experiment.
-F5 is the cross-experiment scatter and is written from the summary table.
+F1, F2, and the dEU candles are written once per comparison. F3, F4, and F6 summarize
+the experiment. F5 is the cross-experiment scatter and is written from the summary table.
 """
 
 from __future__ import annotations
@@ -15,10 +15,10 @@ from matplotlib.figure import Figure
 from src.analysis.effects import quadrant_counts
 
 QUADRANTS = (
-    ("both_correct", "Both correct"),
-    ("reference_wrong_candidate_correct", "Reference wrong, candidate correct"),
-    ("reference_correct_candidate_wrong", "Reference correct, candidate wrong"),
-    ("both_wrong", "Both wrong"),
+    ("both_correct", "Both correct", "Both correct"),
+    ("reference_wrong_candidate_correct", "Reference wrong, candidate correct", "Fixed"),
+    ("reference_correct_candidate_wrong", "Reference correct, candidate wrong", "Broken"),
+    ("both_wrong", "Both wrong", "Both wrong"),
 )
 
 
@@ -48,7 +48,7 @@ def plot_paired_eu_scatter(paired: pd.DataFrame, title: str, badge: str, path: P
     return _save(fig, path)
 
 
-def plot_deu_distribution(paired: pd.DataFrame, title: str, badge: str, path: Path) -> Path:
+def _quadrant_samples(paired: pd.DataFrame) -> tuple[dict[str, int], dict[str, np.ndarray]]:
     reference_correct = paired["reference_correct"].to_numpy(dtype=bool)
     candidate_correct = paired["candidate_correct"].to_numpy(dtype=bool)
     counts = dict(quadrant_counts(reference_correct, candidate_correct))
@@ -59,7 +59,14 @@ def plot_deu_distribution(paired: pd.DataFrame, title: str, badge: str, path: Pa
         "both_wrong": ~reference_correct & ~candidate_correct,
     }
     values = paired["epistemic_reduction"].to_numpy(dtype=np.float64)
-    finite = values[np.isfinite(values)]
+    samples = {key: values[mask][np.isfinite(values[mask])] for key, mask in masks.items()}
+    return counts, samples
+
+
+def plot_deu_distribution(paired: pd.DataFrame, title: str, badge: str, path: Path) -> Path:
+    counts, samples = _quadrant_samples(paired)
+    pieces = [sample for sample in samples.values() if len(sample)]
+    finite = np.concatenate(pieces) if pieces else np.array([])
     if len(finite) == 0:
         edges = np.linspace(-1, 1, 21)
     else:
@@ -69,12 +76,11 @@ def plot_deu_distribution(paired: pd.DataFrame, title: str, badge: str, path: Pa
     axes = fig.subplots(1, 4, sharex=True, sharey=True)
     peak = 1
     histograms = []
-    for key, _label in QUADRANTS:
-        selected = values[masks[key]]
-        hist, _ = np.histogram(selected, bins=edges)
+    for key, _long_label, _short_label in QUADRANTS:
+        hist, _ = np.histogram(samples[key], bins=edges)
         histograms.append(hist)
         peak = max(peak, int(hist.max()) if len(hist) else 1)
-    for ax, (key, label), hist in zip(axes, QUADRANTS, histograms, strict=True):
+    for ax, (key, label, _short_label), hist in zip(axes, QUADRANTS, histograms, strict=True):
         ax.bar(edges[:-1], hist, width=np.diff(edges), align="edge", color="C0")
         ax.axvline(0, color="black", linewidth=1)
         ax.set(title=f"{label}\n{counts[key]} images", xlabel="EU reduction (nats)")
@@ -82,6 +88,68 @@ def plot_deu_distribution(paired: pd.DataFrame, title: str, badge: str, path: Pa
     axes[0].set_ylabel("Images")
     axes[0].set_ylim(0, peak * 1.1)
     fig.suptitle(f"{title}\n{badge}")
+    return _save(fig, path)
+
+
+def plot_deu_candles(paired: pd.DataFrame, title: str, badge: str, path: Path) -> Path:
+    """Box-and-whisker candles of dEU for the four correctness groups.
+
+    The box is the quartile range, the whiskers reach 1.5 IQR, and the diamond is the mean.
+    Fixed means the candidate is correct where the reference is wrong. Broken is the reverse.
+    """
+    counts, samples = _quadrant_samples(paired)
+    fig = Figure(figsize=(8.2, 5.2), layout="constrained")
+    ax = fig.subplots()
+    positions = []
+    drawn = []
+    for index, (key, _long_label, _short_label) in enumerate(QUADRANTS, start=1):
+        if len(samples[key]) == 0:
+            continue
+        positions.append(index)
+        drawn.append(samples[key])
+    if drawn:
+        plotted = ax.boxplot(
+            drawn,
+            positions=positions,
+            widths=0.55,
+            patch_artist=True,
+            whis=1.5,
+            showfliers=True,
+            medianprops={"color": "black", "linewidth": 1.5},
+            whiskerprops={"linewidth": 1.2},
+            capprops={"linewidth": 1.2},
+            flierprops={
+                "marker": "o",
+                "markersize": 3,
+                "alpha": 0.35,
+                "markeredgewidth": 0,
+                "markerfacecolor": "C0",
+            },
+        )
+        for patch in plotted["boxes"]:
+            patch.set_facecolor("C0")
+            patch.set_alpha(0.8)
+        ax.scatter(
+            positions,
+            [float(np.mean(sample)) for sample in drawn],
+            marker="D",
+            s=22,
+            color="black",
+            zorder=4,
+        )
+    ax.axhline(0, color="black", linewidth=1)
+    ax.set_xticks(
+        range(1, len(QUADRANTS) + 1),
+        [f"{short}\n{counts[key]} images" for key, _long, short in QUADRANTS],
+    )
+    ax.set_xlabel(
+        "Fixed: reference wrong, candidate correct.  "
+        "Broken: reference correct, candidate wrong.\n"
+        "Box: quartiles.  Whiskers: 1.5 IQR.  Diamond: mean.",
+        fontsize=8,
+    )
+    ax.set(ylabel="EU reduction (nats)", title=f"{title}\n{badge}")
+    ax.grid(axis="y", alpha=0.3)
     return _save(fig, path)
 
 

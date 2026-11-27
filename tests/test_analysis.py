@@ -198,9 +198,14 @@ def test_single_setup_report_matches_the_hand_calculated_example(tmp_path):
     assert history["epoch"].max() == 3
     assert 4 not in set(history["epoch"])
     assert len(history[history["epoch"] == 3]) == 4
+    report = (output / "REPORT.md").read_text(encoding="utf-8")
+    assert "Share reduced (%)" in report
+    assert "mean_epistemic_uncertainty_reduction_nats" not in report
+    assert "Δ bal. acc. (pp)" in report
     for name in (
         "paired_eu_scatter_primary.png",
         "paired_deu_distribution_primary.png",
+        "paired_deu_candles_primary.png",
         "confusion_matrices.png",
         "paired_effect_estimates.png",
         "validation_curves.png",
@@ -260,5 +265,6 @@ def test_baseline_versus_candidate_report_writes_four_comparisons(tmp_path):
     ]
     assert effects["delta_macro_f1_pp"].abs().max() == 0
     assert len(list((output / "figures").glob("paired_eu_scatter_*.png"))) == 4
+    assert len(list((output / "figures").glob("paired_deu_candles_*.png"))) == 4
     assert "Crop and zoom modality effect" in (output / "REPORT.md").read_text(encoding="utf-8")
     assert not (tmp_path / "result-analysis" / "summary" / "experiment_uncertainty.csv").exists()

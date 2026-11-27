@@ -61,7 +61,7 @@ For each uncertainty quantity, relative reduction is $100$ times the mean paired
 | --- | --- | --- | --- |
 | T1 Cohort and pairing | Core | Comparison × fold, plus pooled | Reference and candidate run IDs, ensemble size, paired image and patient counts, class counts |
 | T2 Performance and uncertainty | Core | Condition × fold, plus pooled | Accuracy, balanced accuracy, macro-F1, NLL, Brier, mean total uncertainty, mean aleatoric uncertainty, mean EU |
-| T3 Paired effects | Core | Comparison | Paired counts, change in balanced accuracy and macro-F1, and for total, aleatoric, and epistemic uncertainty: mean and median reduction in nats, relative reduction (%), and share of images with a reduction (%) |
+| T3 Paired effects | Core | Comparison | Paired counts, change in balanced accuracy and macro-F1, and for total, aleatoric, and epistemic uncertainty: mean and median reduction in nats, relative reduction (%), and share of images with a reduction (%). `paired_effects.csv` keeps these as wide columns. `REPORT.md` prints one narrow block per comparison: a four-column classification row, then a five-column uncertainty table with rows Total, Aleatoric, and Epistemic. |
 | T4 Class breakdown | Supporting | Condition × true class | Support, precision, recall, F1. Include per-class dEU and paired counts in comparison rows if selected. |
 
 ## 4. Figures
@@ -69,7 +69,8 @@ For each uncertainty quantity, relative reduction is $100$ times the mean paired
 | ID | Priority | Figure | Axes, units, and reference marks |
 | --- | --- | --- | --- |
 | F1 | Core | Paired EU scatter | Image-only EU on x, multimodal EU on y, both in nats. Use common limits and a diagonal identity line. Each matched image contributes one point. |
-| F2 | Core | Distribution of paired dEU | Four columns in order: both correct, image-only wrong and multimodal correct, image-only correct and multimodal wrong, both wrong. Plot dEU in nats on x and image count on y. Share bin edges and axis limits, mark zero, and label each panel with its image count. |
+| F2 | Core | Distribution of paired dEU | Four columns in order: both correct, reference wrong and candidate correct (fixed), reference correct and candidate wrong (broken), both wrong. Plot dEU in nats on x and image count on y. Share bin edges and axis limits, mark zero, and label each panel with its image count. |
+| F2 candles | Core | dEU candles for the same four groups | Same group order as F2, one box per group. dEU in nats on y, a zero line, and the image count in the category label. The box is the quartile range, whiskers are 1.5 IQR, fliers are images outside the whiskers, and a diamond marks the mean. |
 | F3 | Core | Confusion matrices | True class on rows, predicted class on columns, with shared class order and color scale. Normalize by true-class support and annotate raw counts. |
 | F4 | Supporting | Paired effect estimates | Comparison or class on y, mean dEU in nats on x, with a zero line. |
 | F5 | Core | Total versus aleatoric uncertainty across experiments | Mean total uncertainty on x and mean aleatoric uncertainty on y, both in nats. Add one point per setup per completed experiment using pooled held-out predictions. Identify the experiment and setup for each point and regenerate the scatter after every completed experiment. |
@@ -95,6 +96,7 @@ outputs/result-analysis/
     figures/
       paired_eu_scatter.png
       paired_deu_distribution.png
+      paired_deu_candles.png
       confusion_matrices.png
       paired_effect_estimates.png
       validation_curves.png
@@ -112,7 +114,7 @@ outputs/result-analysis/
 
 ### Acceptance checks
 
-- Verify that paired rows, class counts, and metric values agree across tables and figures. Check that F2 panel counts sum to the paired image count and that F6 uses only epochs present in the member histories.
+- Verify that paired rows, class counts, and metric values agree across tables and figures. Check that F2 panel counts and F2 candle labels sum to the paired image count and that F6 uses only epochs present in the member histories.
 - Check formulas on a small hand-calculated example. Identical member distributions yield zero disagreement, and identical conditions yield zero paired effects.
 
 The generator is `src.analyze` with `configs/analyze.yaml`. It reads `{val,test}_member_predictions.npz` and member `history.csv` files produced by `src.train`.
