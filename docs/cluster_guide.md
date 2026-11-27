@@ -60,7 +60,13 @@ directly inside the chosen directory.
     cd /vol/miltank/users/$USER/code
     git clone <repo-url> adlm-multimodal-uncertainty && cd adlm-multimodal-uncertainty
     export UV_CACHE_DIR=/meta/users/$USER/.cache/uv
+    export UV_PYTHON_INSTALL_DIR=/vol/miltank/users/$USER/python
+    uv python install 3.12
+    uv venv --python "$(uv python find 3.12)"
     uv sync                       # creates .venv from uv.lock; same env for all three of us
+
+Do not point the virtualenv at `/usr/bin/python3`. That binary is Python 3.12 on the login
+node and Python 3.10 on some compute nodes, so jobs then start without the project packages.
 
 After every `git pull` on selene, refresh the environment before submitting:
 

@@ -81,8 +81,11 @@ def monitor_direction(name: str) -> str:
 
 
 def improved(value: float, best: float, direction: str, min_delta: float) -> bool:
-    if not np.isfinite(value) or not np.isfinite(best):
+    """The first finite score beats the +/- infinity sentinel used before epoch 1."""
+    if not np.isfinite(value):
         return False
+    if not np.isfinite(best):
+        return True
     if direction == "min":
         return value < best - min_delta
     return value > best + min_delta

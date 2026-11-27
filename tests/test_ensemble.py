@@ -8,6 +8,7 @@ import pytest
 import torch
 
 from src.evaluate import evaluate_run
+from src.train import improved
 from src.uq.deep_ensemble import DeepEnsemble, uncertainty
 
 from .conftest import REPO
@@ -17,6 +18,13 @@ from .conftest import REPO
 def test_invalid_seeds(seeds):
     with pytest.raises(ValueError):
         DeepEnsemble(seeds)
+
+
+def test_first_finite_validation_loss_replaces_the_sentinel():
+    assert improved(1.5, float("inf"), "min", 0.0)
+    assert improved(0.4, 1.5, "min", 0.0)
+    assert not improved(1.5, 1.0, "min", 0.0)
+    assert not improved(float("nan"), 1.0, "min", 0.0)
 
 
 def test_entropy_decomposition_is_finite_for_float32_zeros():
