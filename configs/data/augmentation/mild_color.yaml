@@ -1,0 +1,11 @@
+# Later tuning candidate. Lesion color is diagnostic, so color jitter stays out of the baseline.
+_target_: src.data.transforms.AugmentationConfig
+horizontal_flip: 0.5
+vertical_flip: 0.5
+rotation_degrees: 15
+crop_scale: null
+crop_ratio: null
+brightness: 0.10
+contrast: 0.10
+saturation: 0.05
+hue: 0.01

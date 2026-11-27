@@ -1,6 +1,6 @@
 # @package _global_
 defaults:
-  - override /ensemble: deep
+  - baseline_multimodal
   - override /model/tabular_encoder: null
 
-name: deep_ensemble_image_only
+name: baseline_image_only

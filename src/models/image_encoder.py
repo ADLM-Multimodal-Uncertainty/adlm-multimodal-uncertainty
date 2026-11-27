@@ -18,7 +18,7 @@ class TorchvisionResNetEncoder(nn.Module):
         self,
         arch: str = "resnet18",
         pretrained: bool = True,
-        freeze: bool = True,
+        freeze: bool = False,
         proj_dim: int | None = 128,
         dropout: float = 0.2,
     ) -> None:

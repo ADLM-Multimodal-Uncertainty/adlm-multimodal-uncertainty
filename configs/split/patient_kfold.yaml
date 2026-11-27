@@ -1,4 +1,5 @@
-# null reuses the committed five-fold CSV; other counts generate grouped folds.
+# csv=null generates deterministic patient-grouped folds.
+# Five folds with csv=null reuse data/splits/pad_ufes20_5fold_patient.csv.
 # An explicit CSV must contain exactly n_folds folds.
 _target_: src.data.splits.PatientKFoldSplit
 csv: null

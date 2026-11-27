@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from matplotlib.figure import Figure
+from matplotlib.ticker import MaxNLocator
 
 # (panel title, y limits, [(history column suffix, legend label)])
 PANELS = [
@@ -42,7 +43,10 @@ def plot_curves(history: pd.DataFrame, best_epoch: int | None, title: str, path:
         if best_epoch is not None:
             ax.axvline(best_epoch, color="gray", linestyle=":")
         ax.set(xlabel="epoch", title=panel, ylim=ylim)
-        ax.set_xticks(history["epoch"])
+        if len(history) > 12:
+            ax.xaxis.set_major_locator(MaxNLocator(integer=True, nbins=8))
+        else:
+            ax.set_xticks(history["epoch"])
         ax.grid(alpha=0.3)
         ax.legend(fontsize=8)
     if best_epoch is not None:
@@ -72,15 +76,44 @@ def plot_confusion_matrix(
     fig.savefig(path, dpi=150)
 
 
+def _run_title(run_dir: Path) -> str:
+    parts = run_dir.parts
+    if "runs" in parts:
+        return "/".join(parts[parts.index("runs") + 1 :])
+    return run_dir.name
+
+
 def plot_run(run_dir: Path) -> list[Path]:
+    """Plot a member directory, or every member plus the ensemble confusion matrix."""
+    if not (run_dir / "history.csv").exists() and (run_dir / "members").is_dir():
+        written: list[Path] = []
+        members = sorted(path for path in (run_dir / "members").iterdir() if path.is_dir())
+        for member in members:
+            if (member / "history.csv").exists() and (member / "test_metrics.json").exists():
+                written.extend(plot_run(member))
+        metrics_path = run_dir / "test_metrics.json"
+        if metrics_path.exists():
+            metrics = json.loads(metrics_path.read_text())
+            confusion = run_dir / "confusion_matrix.png"
+            plot_confusion_matrix(
+                np.array(metrics["confusion_matrix"]),
+                metrics["class_order"],
+                f"{_run_title(run_dir)}\ntest set, {metrics['n_images']} images",
+                confusion,
+            )
+            written.append(confusion)
+        if not written:
+            raise FileNotFoundError(f"no member histories or test metrics in {run_dir}")
+        return written
+
     metrics = json.loads((run_dir / "test_metrics.json").read_text())
     history = pd.read_csv(run_dir / "history.csv")
     curves, confusion = run_dir / "curves.png", run_dir / "confusion_matrix.png"
-    plot_curves(history, metrics.get("best_epoch"), run_dir.name, curves)
+    plot_curves(history, metrics.get("best_epoch"), _run_title(run_dir), curves)
     plot_confusion_matrix(
         np.array(metrics["confusion_matrix"]),
         metrics["class_order"],
-        f"{run_dir.name}\ntest set, {metrics['n_images']} images",
+        f"{_run_title(run_dir)}\ntest set, {metrics['n_images']} images",
         confusion,
     )
     return [curves, confusion]

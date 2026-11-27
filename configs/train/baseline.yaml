@@ -1,0 +1,21 @@
+defaults:
+  - scheduler: plateau
+  - _self_
+
+epochs: 30
+batch_size: 32
+weighted_loss: true
+class_weight_power: 1.0   # 0 = unweighted ratios, 0.5 = square-root, 1 = inverse frequency
+monitor: val_loss          # minimized; val_nll and val_brier are also minimized monitors
+early_stopping_patience: 8
+early_stopping_min_delta: 0.0
+track_train_metrics: true
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  weight_decay: 0.01
+
+loss:
+  _target_: torch.nn.CrossEntropyLoss
+  label_smoothing: 0.0

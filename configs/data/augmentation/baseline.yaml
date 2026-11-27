@@ -1,0 +1,13 @@
+# Resize, horizontal and vertical flips, and a mild rotation.
+# Reflect padding is applied around the rotation so corners are not black and the
+# lesion border is not cropped away. No zoom and no color change.
+_target_: src.data.transforms.AugmentationConfig
+horizontal_flip: 0.5
+vertical_flip: 0.5
+rotation_degrees: 15
+crop_scale: null
+crop_ratio: null
+brightness: 0.0
+contrast: 0.0
+saturation: 0.0
+hue: 0.0

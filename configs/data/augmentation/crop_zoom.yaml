@@ -1,0 +1,11 @@
+# Later tuning candidate. Cropping can remove border irregularity, so it is not the baseline.
+_target_: src.data.transforms.AugmentationConfig
+horizontal_flip: 0.5
+vertical_flip: 0.5
+rotation_degrees: 15
+crop_scale: [0.9, 1.0]
+crop_ratio: [0.95, 1.05]
+brightness: 0.0
+contrast: 0.0
+saturation: 0.0
+hue: 0.0

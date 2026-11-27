@@ -1,3 +1,7 @@
+defaults:
+  - augmentation: baseline
+  - _self_
+
 root: data/pad_ufes_20
 metadata_csv: ${data.root}/metadata.csv
 image_dir: ${data.root}/images     # searched recursively (flat or imgs_part_*/)

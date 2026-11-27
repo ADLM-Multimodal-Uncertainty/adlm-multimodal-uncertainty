@@ -17,10 +17,12 @@ from .conftest import REPO
 CONFIGS = REPO / "configs"
 GROUPS = [
     "split",
+    "data/augmentation",
     "model/image_encoder",
     "model/tabular_encoder",
     "model/fusion",
     "train",
+    "train/scheduler",
     "ensemble",
     "experiment",
 ]
@@ -58,8 +60,8 @@ def _linear_shapes(module: nn.Module) -> list[tuple[int, int]]:
 @pytest.mark.parametrize(
     ("experiment", "head"),
     [
-        ("draft_baseline", [(512, 128), (20, 64), (192, 128), (128, 6)]),
-        ("draft_image_only", [(512, 128), (128, 128), (128, 6)]),
+        ("baseline_multimodal", [(512, 128), (20, 64), (192, 128), (128, 6)]),
+        ("baseline_image_only", [(512, 128), (128, 128), (128, 6)]),
     ],
 )
 def test_experiment_builds_the_draft_architecture(experiment, head):
@@ -71,7 +73,7 @@ def test_experiment_builds_the_draft_architecture(experiment, head):
 
 
 def test_frozen_backbone_has_no_trainable_parameters_and_stays_in_eval_mode():
-    cfg = _compose(["experiment=draft_baseline", "model.image_encoder.freeze=true"])
+    cfg = _compose(["experiment=baseline_multimodal", "model.image_encoder.freeze=true"])
     model = build_model(cfg.model, n_classes=6, n_meta_features=20).train()
     assert not any(p.requires_grad for p in model.image_encoder.backbone.parameters())
     assert not model.image_encoder.backbone.training
@@ -84,7 +86,7 @@ def test_unknown_experiment_fails_instead_of_running_the_defaults():
 
 
 def test_unfreezing_backbone_enables_training_and_updates_weights():
-    cfg = _compose(["experiment=draft_baseline", *OFFLINE])
+    cfg = _compose(["experiment=baseline_multimodal", *OFFLINE])
     model = build_model(cfg.model, n_classes=6, n_meta_features=20).train()
     encoder = model.image_encoder
     assert all(p.requires_grad for p in encoder.backbone.parameters())
@@ -102,7 +104,13 @@ def test_unfreezing_backbone_enables_training_and_updates_weights():
 
 
 def test_default_patient_folds_and_backbone_training():
-    cfg = _compose(["experiment=patient_5fold_multimodal"])
+    cfg = _compose(["experiment=baseline_multimodal"])
     assert cfg.split.n_folds == 2
     assert cfg.model.image_encoder.freeze is False
     assert cfg.model.image_encoder.pretrained is True
+    assert cfg.train.epochs == 30
+    assert cfg.train.weighted_loss is True
+    assert cfg.train.class_weight_power == 1.0
+    assert list(cfg.ensemble.seeds) == [0, 1, 2, 3, 4]
+    assert cfg.data.augmentation.rotation_degrees == 15
+    assert cfg.data.augmentation.crop_scale is None

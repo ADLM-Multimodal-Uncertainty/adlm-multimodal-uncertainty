@@ -1,0 +1,22 @@
+output_root: outputs
+runs_root: ${output_root}/runs
+analysis_root: ${output_root}/result-analysis
+
+experiment_id: null
+eval_split: test          # val while tuning; test for the final baseline report
+n_folds: 2
+bootstrap_samples: 1000
+bootstrap_seed: 0
+
+# Single-setup report: image-only (or another reference) versus one candidate.
+reference: null
+candidate: null
+reference_label: null
+candidate_label: null
+
+# Baseline-versus-candidate report. Set all four run groups and candidate_label.
+baseline_label: Baseline
+baseline_image: null
+baseline_multimodal: null
+candidate_image: null
+candidate_multimodal: null

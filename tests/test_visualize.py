@@ -58,6 +58,17 @@ def test_history_without_best_epoch_still_plots(tmp_path):
     assert all(path.exists() for path in plot_run(tmp_path))
 
 
+def test_ensemble_directory_plots_members_and_its_own_confusion_matrix(tmp_path):
+    member = tmp_path / "members" / "seed_0"
+    member.mkdir(parents=True)
+    _write_run(member, np.eye(3, dtype=int), ["A", "B", "C"])
+    metrics = json.loads((member / "test_metrics.json").read_text())
+    (tmp_path / "test_metrics.json").write_text(json.dumps(metrics))
+    paths = plot_run(tmp_path)
+    assert (member / "curves.png").exists()
+    assert (tmp_path / "confusion_matrix.png") in paths
+
+
 def test_history_from_before_validation_loss_was_tracked_still_plots(tmp_path):
     _write_run(tmp_path, np.eye(3, dtype=int), ["A", "B", "C"], history=OLD_HISTORY)
     assert all(path.exists() for path in plot_run(tmp_path))

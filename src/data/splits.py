@@ -25,43 +25,6 @@ def check_patient_disjoint(parts: dict[str, pd.DataFrame]) -> None:
             seen[patient] = name
 
 
-class PatientHoldoutSplit:
-    """Single holdout split by patient, retried with seed + attempt until every class
-    occurs in every partition. `fold` is ignored."""
-
-    def __init__(
-        self, val_size: float = 0.15, test_size: float = 0.15, seed: int = 42, attempts: int = 100
-    ) -> None:
-        self.val_size = val_size
-        self.test_size = test_size
-        self.seed = seed
-        self.attempts = attempts
-
-    def partition(self, df: pd.DataFrame, fold: int = 0) -> dict[str, pd.DataFrame]:
-        required = set(df["diagnostic"])
-        for attempt in range(self.attempts):
-            seed = self.seed + attempt
-            outer = GroupShuffleSplit(n_splits=1, test_size=self.test_size, random_state=seed)
-            train_val_idx, test_idx = next(outer.split(df, groups=df["patient_id"]))
-            train_val = df.iloc[train_val_idx]
-            inner = GroupShuffleSplit(
-                n_splits=1, test_size=self.val_size / (1 - self.test_size), random_state=seed
-            )
-            train_idx, val_idx = next(inner.split(train_val, groups=train_val["patient_id"]))
-            parts = {
-                "train": train_val.iloc[train_idx],
-                "val": train_val.iloc[val_idx],
-                "test": df.iloc[test_idx],
-            }
-            if all(set(part["diagnostic"]) == required for part in parts.values()):
-                check_patient_disjoint(parts)
-                return parts
-        raise RuntimeError(
-            f"no patient-disjoint split with every class in every partition after "
-            f"{self.attempts} attempts"
-        )
-
-
 class PatientKFoldSplit:
     """Fold assignment read from a CSV (img_id, patient_id, fold).
 
@@ -72,7 +35,7 @@ class PatientKFoldSplit:
     """
 
     def __init__(
-        self, csv: str | Path | None = None, n_folds: int = 5,
+        self, csv: str | Path | None = None, n_folds: int = 2,
         seed: int = 42, val_size: float = 0.2,
     ) -> None:
         if not isinstance(n_folds, int) or isinstance(n_folds, bool) or n_folds < 2:

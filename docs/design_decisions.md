@@ -1,7 +1,7 @@
 # Design decisions
 
 Open design questions for the experiments in this repo, the options for each, and where the
-code stands. Last updated: 11 Nov 2026.
+code stands. Last updated: 27 Nov 2026.
 
 ## Required architecture: Hydra configuration
 
@@ -24,7 +24,7 @@ Repository instructions for coding agents: [`../AGENTS.md`](../AGENTS.md).
 
 Status labels:
 
-- **Current**: what `experiment=draft_baseline` does today (the default).
+- **Current**: what `experiment=baseline_multimodal` does today (the shared default recipe).
 - **Available**: implemented; select it through config or a CLI override, no code change.
 - **Not implemented**: needs code first (a new class plus a YAML, or a change to the pipeline).
 
@@ -37,15 +37,14 @@ NEV 244, SCC 192, SEK 235. The default holdout split has 1,602 / 354 / 342 image
 ## A. Data and splits
 
 ### A1. Split protocol
-Current: one patient-grouped holdout, ~70/15/15, seed 42, retried until every class is in every
-partition. Not stratified: test holds only 5 MEL images.
-- Patient holdout 70/15/15 (`split=patient_holdout`): **Current**
-- Patient-grouped 5-fold from the committed CSV, test = `fold`, val = `fold + 1`
-  (`split=patient_kfold fold=0..4`): **Available**. Paired presets
-  `patient_5fold_multimodal` / `patient_5fold_image_only` run all folds with Hydra `-m`.
-  Three training folds, one validation fold and one test fold give approximately 60/20/20;
-  assignments are validated before use.
-- Repeated holdout over several split seeds (`split.seed=...`): **Available**
+Current: two patient-grouped folds. Test is one fold (about half the patients). Validation is
+20% of the remaining patients (`split.val_size=0.2`, `split.seed=42`). Not stratified.
+- Patient-grouped k-fold (`split=patient_kfold`, default `n_folds=2`): **Current**.
+  `experiment=baseline_multimodal` and `experiment=baseline_image_only` sweep the folds with `-m`.
+- Five folds from the committed CSV (`split.n_folds=5`): **Available**. Test is `fold`,
+  validation is `fold + 1`, training is the rest, about 60/20/20.
+- The old single 70/15/15 holdout: **Removed**.
+- Repeated holdout over several split seeds: **Removed** with the single holdout split
 - Class-stratified patient-grouped split (holdout or new folds): **Not implemented**
 - Nested cross-validation (inner folds for model selection): **Not implemented**
 
@@ -138,14 +137,16 @@ Current: resized to 224 x 224 without keeping the aspect ratio.
 - Per-image normalization: **Not implemented**
 
 ### C3. Training augmentation
-Current: random horizontal flip only, hard-coded in `src/data/transforms.py` (not configurable).
-- Horizontal flip: **Current**
-- Vertical flip, rotation: **Not implemented**
-- Random resized crop: **Not implemented**
-- Color jitter (careful: color can be diagnostic): **Not implemented**
-- Blur, cutout / random erasing: **Not implemented**
-- RandAugment / TrivialAugment: **Not implemented**
-- No augmentation: **Not implemented**
+Current: training images only, after the patient split. Resize to 224, horizontal and vertical
+flips (`p=0.5`), and rotation of 15 degrees with reflect padding (`data/augmentation=baseline`).
+Validation and test are resized and normalized.
+- No augmentation (`data/augmentation=none`): **Available**
+- Flips only (`data/augmentation=flips`): **Available**
+- Baseline geometry: **Current**
+- Conservative crop/zoom (`data/augmentation=crop_zoom`): **Available**, not the baseline
+- Mild color jitter (`data/augmentation=mild_color`): **Available**, not the baseline
+- Crop plus mild color (`data/augmentation=combined`): **Available**, not the baseline
+- Blur, cutout / random erasing, RandAugment / TrivialAugment: **Not implemented**
 
 ### C4. Test-time augmentation
 - None: **Current**
@@ -156,9 +157,10 @@ Current: random horizontal flip only, hard-coded in `src/data/transforms.py` (no
 ## D. Class imbalance
 
 ### D1. Loss function
-- Unweighted cross-entropy: **Current**
-- Inverse-frequency class weights, n / (K x count_k) (`train.weighted_loss=true`):
-  **Available**
+- Inverse-frequency class weights raised to `train.class_weight_power` and rescaled to mean 1
+  (`weighted_loss=true`, power `1.0`): **Current**
+- Unweighted cross-entropy (`weighted_loss=false` or power `0`): **Available**
+- Square-root tempered weights (power `0.5`): **Available**
 - Label smoothing (`+train.loss.label_smoothing=0.1`; the `+` adds a key the YAML does not
   list): **Available**
 - Softened (square-root) class weights: **Not implemented**
@@ -269,8 +271,8 @@ or a weighted one followed by calibration (A3).
 ## G. Training
 
 ### G1. Image-only vs multimodal: joint or separate training
-Current: two separate runs (`draft_image_only`, `draft_baseline`). They share only the frozen
-backbone; projection and heads are trained independently.
+Current: two separate runs (`baseline_image_only`, `baseline_multimodal`). The image encoder is
+fine-tuned independently in each run.
 - Separate runs: **Current**
 - One model with modality dropout, evaluated with and without metadata (same weights):
   **Not implemented**
@@ -279,18 +281,18 @@ backbone; projection and heads are trained independently.
 - Weighting of the summed losses: **Not implemented**
 
 ### G2. Epochs
-- 10 epochs: **Current**
-- More epochs, e.g. 30 (`train.epochs=30`): **Available**
+- 30 epochs (`train.epochs`): **Current**
+- Another budget (`train.epochs=10`): **Available**
 
 ### G3. Early stopping and checkpoint choice
-- No early stopping; keep the epoch with the best `train.monitor`: **Current**
-- Early stopping with patience on validation loss or macro-F1: **Not implemented**
-- Select on validation loss (lower is better): **Not implemented** (`monitor` only maximises)
+- Early stopping on `val_loss`, patience 8, minimum improvement 0. The first epoch is always
+  saved. `val_nll` and `val_brier` can also be minimized; accuracy and macro-F1 can be maximized.
+  **Current**
 - Keep the last epoch: **Not implemented**
 - Checkpoint averaging / SWA: **Not implemented**
 
 ### G4. Optimizer and learning rate
-- AdamW, lr 1e-3, PyTorch default weight decay 0.01: **Current**
+- AdamW, lr `1e-4`, weight decay `0.01`: **Current**
 - Other learning rate (`train.optimizer.lr=3e-4`): **Available**
 - Other weight decay (`+train.optimizer.weight_decay=...`): **Available**
 - Other optimizer, e.g. SGD with momentum
@@ -298,10 +300,12 @@ backbone; projection and heads are trained independently.
 - Separate learning rates for backbone and heads: **Not implemented**
 
 ### G5. Learning-rate schedule
-- Constant learning rate: **Current**
-- Cosine annealing: **Not implemented**
+- ReduceLROnPlateau, factor 0.5, patience 3, minimum `1e-6`, stepped on the monitor after each
+  epoch (`train/scheduler=plateau`): **Current**
+- Cosine annealing (`train/scheduler=cosine`, horizon `train.epochs`): **Available**
+- Step decay (`train/scheduler=step`): **Available**
+- Constant learning rate (`train/scheduler=none`): **Available**
 - Linear warmup: **Not implemented**
-- Reduce on plateau: **Not implemented**
 
 ### G6. Batch size and precision
 - Batch size 32, full precision: **Current**
@@ -310,7 +314,7 @@ backbone; projection and heads are trained independently.
 - Mixed precision (AMP) for cluster GPUs: **Not implemented**
 
 ### G7. Regularization
-- Dropout in projection, metadata encoder and head; frozen backbone: **Current**
+- Dropout in the projection, metadata encoder, and head; the backbone is fine-tuned: **Current**
 - Other dropout rates / weight decay: **Available**
 - Mixup / CutMix: **Not implemented**
 
@@ -330,11 +334,13 @@ backbone; projection and heads are trained independently.
 - MEL recall: **Not implemented**
 
 ### H2. Reported metrics
-- Accuracy, balanced accuracy, macro-F1, per-class precision / recall / F1, confusion matrix:
-  **Current**
+- Accuracy, balanced accuracy, macro-F1, per-class precision / recall / F1, confusion matrix,
+  NLL (floor `1e-12`), and multiclass Brier score: **Current**
+- Image-weighted total, aleatoric, and epistemic uncertainty, plus paired reductions:
+  **Current** (`python -m src.analyze`)
 - Macro one-vs-rest AUROC: **Not implemented**
-- Per-class sensitivity and specificity (MEL in particular): **Not implemented**
-- Calibration: ECE, NLL, Brier score: **Not implemented**
+- Per-class sensitivity and specificity beyond the classification report: **Not implemented**
+- Expected calibration error: **Not implemented**
 - Selective prediction (risk-coverage curve, AURC): **Not implemented**
 
 ### H3. Aggregation and statistical confidence
@@ -349,10 +355,9 @@ backbone; projection and heads are trained independently.
   (`train.track_train_metrics=true`): **Current**
 
 ### H5. Visualizations
-- Loss and metric curves (train dashed, validation solid), test confusion matrix: **Current**
+- Per-member loss and metric curves, and the test confusion matrix: **Current**
+- Standardized comparison figures F1–F6 in `outputs/result-analysis/`: **Current**
 - Reliability diagrams: **Not implemented**
-- Per-class bar charts: **Not implemented**
-- Uncertainty histograms / dEU plots: **Not implemented**
 
 ---
 
@@ -365,7 +370,7 @@ common pipeline; see the README for their formats. Other estimators remain open.
 ### I1. Epistemic uncertainty estimator
 - Deep ensemble over seeds: **Available**
 - MC dropout (which dropout layers, number of passes): **Not implemented**
-- Last-layer Laplace approximation (laplace-torch is already a dependency): **Not implemented**
+- Last-layer Laplace approximation: **Not implemented**
 - Ensemble of heads only on the shared frozen backbone (cheap, but less diverse, likely
   underestimates epistemic uncertainty): **Not implemented**
 - SWAG: **Not implemented**
@@ -381,8 +386,8 @@ common pipeline; see the README for their formats. Other estimators remain open.
 - Variance-based decomposition: **Not implemented**
 
 ### I4. With vs without metadata (how dEU is measured)
-- Design 1, paired separate models (image-only vs multimodal): **Not implemented**
-  (the paired models exist as `draft_image_only` / `draft_baseline`, the dEU computation does not)
+- Design 1, paired separate models (image-only vs multimodal): **Current**
+  (`python -m src.analyze` joins the two run groups on fold and image ID)
 - Design 2, same weights with metadata masked (needs G1 modality dropout): **Not implemented**
 
 ### I5. Controls for dEU

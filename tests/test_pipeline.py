@@ -13,7 +13,7 @@ from src import CLASSES
 from .conftest import REPO
 
 
-@pytest.mark.parametrize("experiment", ["draft_baseline", "draft_image_only"])
+@pytest.mark.parametrize("experiment", ["baseline_multimodal", "baseline_image_only"])
 def test_experiment_trains_and_evaluates(experiment, synthetic_root, tmp_path):
     epochs = 2
     result = subprocess.run(
@@ -27,6 +27,7 @@ def test_experiment_trains_and_evaluates(experiment, synthetic_root, tmp_path):
             "train.batch_size=16",
             "model.image_encoder.pretrained=false",
             "model.image_encoder.freeze=false",
+            "~ensemble",
             "device=cpu",
         ],
         cwd=REPO,
@@ -35,16 +36,19 @@ def test_experiment_trains_and_evaluates(experiment, synthetic_root, tmp_path):
     )
     assert result.returncode == 0, result.stderr
 
-    run_dir = tmp_path / "outputs" / "runs" / f"{experiment}-patient_holdout-f0-s42"
+    run_dir = tmp_path / "outputs" / "runs" / experiment / "fold_0"
     cfg = OmegaConf.load(run_dir / "config.yaml")
-    assert (cfg.model.get("tabular_encoder") is None) == (experiment == "draft_image_only")
+    assert (cfg.model.get("tabular_encoder") is None) == (experiment == "baseline_image_only")
     assert (run_dir / "best.pt").exists()
     assert (run_dir / "curves.png").stat().st_size > 0
     assert (run_dir / "confusion_matrix.png").stat().st_size > 0
     history = pd.read_csv(run_dir / "history.csv")
     assert len(history) == epochs
-    for column in ("train_loss", "val_loss", "train_macro_f1", "val_macro_f1"):
+    expected = ("train_loss", "val_loss", "val_nll", "val_brier", "train_macro_f1", "val_macro_f1")
+    for column in expected:
         assert history[column].notna().all(), column
+    assert (run_dir / "val_predictions.csv").exists()
+    assert (run_dir / "val_metrics.json").exists()
 
     metrics = json.loads((run_dir / "test_metrics.json").read_text())
     predictions = pd.read_csv(run_dir / "test_predictions.csv")
@@ -63,11 +67,14 @@ def test_five_fold_multirun(mode, n_folds, synthetic_root, tmp_path):
     assignment["fold"] = assignment["patient_id"].str[-2:].astype(int) % 5
     csv_path = tmp_path / "folds.csv"
     assignment.to_csv(csv_path, index=False)
-    experiment = f"patient_5fold_{mode}"
+    experiment = "baseline_multimodal" if mode == "multimodal" else "baseline_image_only"
     result = subprocess.run(
         [
             sys.executable, "-m", "src.train", "-m",
             f"experiment={experiment}",
+            "tag=_pipeline",
+            "~ensemble",
+            "train.weighted_loss=false",
             f"split.n_folds={n_folds}",
             *([f"split.csv={csv_path}"] if n_folds == 5 else []),
             f"data.root={synthetic_root}", f"output_root={tmp_path / 'outputs'}",
@@ -80,7 +87,7 @@ def test_five_fold_multirun(mode, n_folds, synthetic_root, tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     tested = []
     for fold in range(n_folds):
-        run_dir = tmp_path / "outputs" / "runs" / f"{experiment}-patient_kfold-f{fold}-s42"
+        run_dir = tmp_path / "outputs" / "runs" / f"{experiment}_pipeline" / f"fold_{fold}"
         cfg = OmegaConf.load(run_dir / "config.yaml")
         assert cfg.fold == fold
         assert cfg.split.n_folds == n_folds

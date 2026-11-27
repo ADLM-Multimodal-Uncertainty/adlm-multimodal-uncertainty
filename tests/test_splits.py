@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from src.data.splits import PatientHoldoutSplit, PatientKFoldSplit, check_patient_disjoint
+from src.data.splits import PatientKFoldSplit, check_patient_disjoint
 
 from .conftest import REPO, synthetic_metadata
 
@@ -14,27 +14,10 @@ def _assert_valid(parts: dict[str, pd.DataFrame], df: pd.DataFrame) -> None:
     assert set().union(*(set(p["img_id"]) for p in parts.values())) == set(df["img_id"])
 
 
-def test_holdout_is_patient_disjoint_with_every_class_everywhere():
-    df = synthetic_metadata()
-    parts = PatientHoldoutSplit(seed=42).partition(df)
-    _assert_valid(parts, df)
-    for part in parts.values():
-        assert set(part["diagnostic"]) == set(df["diagnostic"])
-
-
-def test_holdout_is_deterministic_and_seed_dependent():
-    df = synthetic_metadata()
-    a = PatientHoldoutSplit(seed=42).partition(df)
-    b = PatientHoldoutSplit(seed=42).partition(df)
-    c = PatientHoldoutSplit(seed=7).partition(df)
-    assert all(a[k]["img_id"].tolist() == b[k]["img_id"].tolist() for k in a)
-    assert a["test"]["img_id"].tolist() != c["test"]["img_id"].tolist()
-
-
 @pytest.mark.parametrize("fold", range(5))
 def test_kfold_uses_fold_as_test_and_next_fold_as_val(fold):
     df = pd.read_csv(KFOLD_CSV, dtype={"img_id": str}).drop(columns="fold")
-    parts = PatientKFoldSplit(KFOLD_CSV).partition(df, fold)
+    parts = PatientKFoldSplit(KFOLD_CSV, n_folds=5).partition(df, fold)
     _assert_valid(parts, df)
     assert set(parts["test"]["fold"]) == {fold}
     assert set(parts["val"]["fold"]) == {(fold + 1) % 5}
@@ -43,7 +26,7 @@ def test_kfold_uses_fold_as_test_and_next_fold_as_val(fold):
 def test_kfold_rejects_rows_missing_from_the_assignment():
     df = synthetic_metadata()
     with pytest.raises(ValueError, match="missing"):
-        PatientKFoldSplit(KFOLD_CSV).partition(df, 0)
+        PatientKFoldSplit(KFOLD_CSV, n_folds=5).partition(df, 0)
 
 
 def test_disjointness_check_catches_shared_patients():
@@ -54,7 +37,7 @@ def test_disjointness_check_catches_shared_patients():
 
 def test_every_patient_is_tested_once_across_five_folds():
     df = pd.read_csv(KFOLD_CSV, dtype={"patient_id": str, "img_id": str}).drop(columns="fold")
-    tests = [PatientKFoldSplit(KFOLD_CSV).partition(df, f)["test"] for f in range(5)]
+    tests = [PatientKFoldSplit(KFOLD_CSV, n_folds=5).partition(df, f)["test"] for f in range(5)]
     combined = pd.concat(tests)
     assert len(combined) == len(df)
     assert not combined["img_id"].duplicated().any()
@@ -65,7 +48,7 @@ def test_every_patient_is_tested_once_across_five_folds():
 @pytest.mark.parametrize("fold", [-1, 5])
 def test_kfold_rejects_invalid_requested_fold(fold):
     with pytest.raises(ValueError, match="fold must be"):
-        PatientKFoldSplit(KFOLD_CSV).partition(synthetic_metadata(), fold)
+        PatientKFoldSplit(KFOLD_CSV, n_folds=5).partition(synthetic_metadata(), fold)
 
 
 @pytest.mark.parametrize(
@@ -98,7 +81,7 @@ def test_kfold_rejects_invalid_assignments(tmp_path, case, message):
     path = tmp_path / "folds.csv"
     assignment.to_csv(path, index=False)
     with pytest.raises(ValueError, match=message):
-        PatientKFoldSplit(path).partition(df, 0)
+        PatientKFoldSplit(path, n_folds=5).partition(df, 0)
 
 
 @pytest.mark.parametrize("n_folds", [0, 1, 2.5, True])
@@ -129,13 +112,17 @@ def test_kfold_rejects_metadata_without_all_partitions():
     df = pd.read_csv(KFOLD_CSV, dtype={"patient_id": str, "img_id": str})
     df = df[df["fold"] == 0].drop(columns="fold")
     with pytest.raises(ValueError, match="train, val and test"):
-        PatientKFoldSplit(KFOLD_CSV).partition(df, 0)
+        PatientKFoldSplit(KFOLD_CSV, n_folds=5).partition(df, 0)
+
+
+def test_default_fold_count_is_two():
+    assert PatientKFoldSplit().n_folds == 2
 
 
 def test_default_five_fold_assignment_is_preserved():
     df = pd.read_csv(KFOLD_CSV, dtype={"img_id": str}).drop(columns="fold")
-    default = PatientKFoldSplit().partition(df, 0)
-    explicit = PatientKFoldSplit(KFOLD_CSV).partition(df, 0)
+    default = PatientKFoldSplit(n_folds=5).partition(df, 0)
+    explicit = PatientKFoldSplit(KFOLD_CSV, n_folds=5).partition(df, 0)
     assert all(default[k].equals(explicit[k]) for k in default)
 
 

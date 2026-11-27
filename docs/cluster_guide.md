@@ -46,13 +46,13 @@ First login:
     ln -s /meta/users/$USER/vscode-server ~/.vscode-server
     mkdir -p /vol/miltank/users/$USER/{code,outputs,checkpoints}
 
-Data layout the code expects (set `DATA_ROOT`):
+Data layout the training script accepts. `DATA_ROOT` may point at a directory that contains
+either `pad_ufes_20/` or `pad-ufes-20/`; both names are checked, and `metadata.csv` must be
+directly inside the chosen directory.
 
-    $DATA_ROOT/
-      pad-ufes-20/
-        metadata.csv
-        images/          # all .png from the Mendeley download, flat
-      isic2019/          # later
+    $DATA_ROOT/pad_ufes_20/
+      metadata.csv
+      images/          # all images from the Mendeley download, flat or imgs_part_*/
 
 ## 4. Environment
 
@@ -62,12 +62,23 @@ Data layout the code expects (set `DATA_ROOT`):
     export UV_CACHE_DIR=/meta/users/$USER/.cache/uv
     uv sync                       # creates .venv from uv.lock; same env for all three of us
 
+After every `git pull` on selene, refresh the environment before submitting:
+
+    ml python/uv
+    uv sync --extra dev
+
 Put in `~/.bashrc` (that is allowed; it is a dotfile, not data):
 
     export DATA_ROOT=/vol/miltank/projects/practical_wise2627/<group>/data
     export OUTPUT_ROOT=/vol/miltank/users/$USER/outputs
-    export WANDB_DIR=/vol/miltank/users/$USER/outputs/wandb
-    export WANDB_API_KEY=<your key>      # or `wandb login` once
+    export UV_CACHE_DIR=/meta/users/$USER/.cache/uv
+    export TORCH_HOME=/vol/miltank/users/$USER/checkpoints/torch
+
+Before the first job, confirm home contains only dotfiles and symlinks into `/meta`:
+
+    ls -la ~
+    mkdir -p /vol/miltank/users/$USER/outputs/slurm
+    du -sh /vol/miltank/users/$USER
 
 ## 5. SLURM
 
@@ -75,23 +86,46 @@ Submit: `sbatch scripts/slurm/train.sbatch`. Monitor: `squeue -u $USER`, `scontr
 `sacct -j <id> --format=JobID,State,Elapsed,MaxRSS`. Cancel: `scancel <id>`.
 
 Two QoS:
-- `master-queuesave`: at most 2 jobs, never pre-empted. Use for the runs that matter.
-- `master`: unlimited jobs, pre-empted by higher priority, not scheduled under full load. Use for sweeps.
+- `master-queuesave`: at most two jobs at a time, including array tasks. They are not pre-empted.
+  Use this for training. Two arrays submitted with `%2` can start four tasks and break the cap;
+  submit each paired setup with `--array=0-1%1` so the two setups together use exactly two jobs.
+- `master`: unlimited jobs, pre-empted by higher priority, and not scheduled when the cluster is full.
+  Do not use it for these runs.
 
 Rules
-- Request a GPU only if the job uses one.
-- Fewer than 32 CPUs, well below 128 GB RAM.
+- Request a GPU only for training. Analysis and plotting stay on the laptop, or on a CPU job if they
+  are ever submitted. Do not request `--gres=gpu` for `src.analyze`.
+- Fewer than 32 CPUs (6 is enough), well below 128 GB RAM (24 GB is enough).
 - Long-running anything (training, preprocessing, downloads) goes through sbatch, not selene.
 - No training in notebooks.
-- All data, scripts, outputs, checkpoints on `/vol/miltank/...`.
+- All data, scripts, outputs, checkpoints, and SLURM logs live on `/vol/miltank/...`.
+  Caches live on `/meta/users/$USER/...`. The home directory stays empty.
+- A single `sbatch` command is one Hydra run, not a multirun. Changing a hyperparameter
+  without `name=...` overwrites `outputs/runs/<experiment>/`. Give every trial its own name.
+- Submit only a commit that has been pushed and pulled. The job prints that commit hash.
 
 Templates in `scripts/slurm/`:
-- `smoke_test.sbatch`: 5-minute GPU job that prints `nvidia-smi` and imports torch. Run this first.
-- `train.sbatch`: single training run, config via Hydra overrides.
-- `ensemble_array.sbatch`: job array over fold x seed (25 tasks) for a deep ensemble.
+- `smoke_test.sbatch`: one short GPU job that prints `nvidia-smi`, imports torch, and runs pytest.
+  Run `uv sync --extra dev` on the login node first; the job uses `.venv/bin/python`.
+- `train.sbatch`: one training command. Pass Hydra overrides, including `experiment=` and `fold=`.
+- `fold_ensemble_array.sbatch`: one array task per fold (`--array=0-1%1`). Each task trains all five
+  ensemble members of that fold and writes `members/seed_<s>/` plus the aggregated predictions.
+  Logs go to `/vol/miltank/users/$USER/outputs/slurm/`.
 
-Job arrays: `#SBATCH --array=0-24%2` runs 25 tasks, 2 at a time (fits master-queuesave).
-`fold = SLURM_ARRAY_TASK_ID // 5`, `seed = SLURM_ARRAY_TASK_ID % 5`.
+Paired baseline, which stays inside the two-job cap:
+
+    sbatch --array=0-1%1 scripts/slurm/fold_ensemble_array.sbatch experiment=baseline_image_only
+    sbatch --array=0-1%1 scripts/slurm/fold_ensemble_array.sbatch experiment=baseline_multimodal
+
+The dataset is staged to node-local `/tmp` for the job. The saved `config.yaml` still records
+the `/vol/miltank` data path. Set `STAGE_TO_LOCAL=0` to read images from the network filesystem.
+
+Copy a finished run group back to a laptop, without checkpoint files:
+
+    scripts/local/sync_cluster_runs.sh baseline_image_only baseline_multimodal
+
+`CLUSTER_USER` and `CLUSTER_HOST` (default `selene`) select the remote account. Set
+`INCLUDE_CHECKPOINTS=1` to copy `*.pt` as well.
 
 ## 6. Interactive debugging (shs: VS Code / Jupyter inside a SLURM job)
 
@@ -120,12 +154,16 @@ Use this for stepping through a batch, not for training.
 - A CPU run of `python -m src.train` on a tiny subset (small images, one epoch) must finish in
   under a minute; this is the correctness check before every cluster run.
 - Tests: `uv run pytest -q`.
-- Commit, push, then `git pull` on selene and submit.
+- Commit, push, then on selene `git pull` and `uv sync --extra dev` before submitting.
+- Do not start another `master-queuesave` job while two are already pending or running.
 
 ## 8. Checklist before any real run
 
-- [ ] Code committed and pushed; commit hash in the W&B config.
-- [ ] Config file under `configs/` (no values edited in the script).
+- [ ] Code committed and pushed; `git pull` and `uv sync --extra dev` done on selene.
+- [ ] The job log will print that commit hash.
+- [ ] `ls -la ~` shows only dotfiles and symlinks, no data.
+- [ ] `du -sh /vol/miltank/users/$USER` is comfortably under the 500 GB group limit.
+- [ ] Config file under `configs/` (no values edited in the script). A changed setting has its own `name=`.
 - [ ] Output and checkpoint paths under `/vol/miltank`.
-- [ ] Correct QoS, GPU only if needed, time limit realistic.
-- [ ] Experiments row created in Notion with status "running".
+- [ ] `master-queuesave`, at most two jobs, GPU only for training, time limit realistic.
+- [ ] `mkdir -p /vol/miltank/users/$USER/outputs/slurm` has been run once.

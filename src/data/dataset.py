@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
+from hydra.utils import instantiate
 from omegaconf import DictConfig
 from PIL import Image, ImageOps
 from torch.utils.data import Dataset
@@ -15,7 +17,7 @@ from torch.utils.data import Dataset
 from src import CLASSES
 from src.data.metadata_encoding import clean_features, make_preprocessor
 from src.data.splits import Split
-from src.data.transforms import image_transform
+from src.data.transforms import AugmentationConfig, image_transform
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
 
@@ -85,10 +87,33 @@ class FoldData:
     n_meta_features: int
 
 
+def _resolve_runtime_data_paths(cfg: DictConfig) -> tuple[Path, Path]:
+    """Read a node-local mirror when `ADLM_LOCAL_DATA_ROOT` points at staged data.
+
+    The saved Hydra config keeps the canonical `data.root`. Cluster jobs stage the
+    dataset to local disk and set the environment variable for the training process only.
+    """
+    metadata_csv = Path(cfg.metadata_csv)
+    image_dir = Path(cfg.image_dir)
+    local_root = os.environ.get("ADLM_LOCAL_DATA_ROOT")
+    if local_root:
+        local_path = Path(local_root)
+        local_meta = local_path / "metadata.csv"
+        local_images = local_path / "images"
+        if local_meta.is_file() and local_images.is_dir():
+            return local_meta, local_images
+    return metadata_csv, image_dir
+
+
 def build_fold(cfg: DictConfig, split: Split, fold: int) -> FoldData:
     """Partition with `split`, fit the metadata preprocessor on the training rows only, and
-    build the three datasets. Deterministic, so evaluation can rebuild it from the config."""
-    parts = split.partition(load_metadata(cfg.metadata_csv), fold)
+    build the three datasets. Deterministic, so evaluation can rebuild it from the config.
+
+    Patients are split before any augmentation. Only the training dataset receives the
+    stochastic recipe; validation and test are resized and normalized.
+    """
+    metadata_csv, image_dir = _resolve_runtime_data_paths(cfg)
+    parts = split.partition(load_metadata(metadata_csv), fold)
     if cfg.subset:
         parts = {name: part.head(int(cfg.subset)) for name, part in parts.items()}
 
@@ -100,10 +125,17 @@ def build_fold(cfg: DictConfig, split: Split, fold: int) -> FoldData:
         for name, part in parts.items()
     }
 
-    index = build_image_index(cfg.image_dir)
+    if cfg.get("augmentation") is None:
+        augmentation = AugmentationConfig()
+    else:
+        augmentation = instantiate(cfg.augmentation)
+    index = build_image_index(image_dir)
     datasets = {
         name: SkinLesionDataset(
-            parts[name], features[name], index, image_transform(cfg.image_size, name == "train")
+            parts[name],
+            features[name],
+            index,
+            image_transform(cfg.image_size, name == "train", augmentation),
         )
         for name in parts
     }

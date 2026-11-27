@@ -1,0 +1,10 @@
+_target_: src.data.transforms.AugmentationConfig
+horizontal_flip: 0.5
+vertical_flip: 0.5
+rotation_degrees: 0.0
+crop_scale: null
+crop_ratio: null
+brightness: 0.0
+contrast: 0.0
+saturation: 0.0
+hue: 0.0

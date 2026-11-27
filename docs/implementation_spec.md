@@ -1,13 +1,13 @@
 # Result analysis specification
 
-Status: draft template. The primary comparison is image-only versus image plus clinical metadata. Items marked **TBD** require a decision before implementation.
+Status: implemented by `python -m src.analyze`. The primary comparison is image-only versus image plus clinical metadata. Hyperparameter comparisons use the same formulas with the declared reference and candidate.
 
 ## 1. Comparisons and inputs
 
 | Comparison ID | Cohort and class order | Reference | Candidate | Run IDs and test folds | Priority |
 | --- | --- | --- | --- | --- | --- |
-| primary | PAD-UFES-20, six classes | Image-only | Image + full metadata | TBD | Primary |
-| TBD | TBD | TBD | TBD | TBD | Optional |
+| primary | PAD-UFES-20, six classes | Image-only | Image + full metadata | `baseline_image_only` and `baseline_multimodal`, folds 0 and 1 | Primary |
+| recipe | PAD-UFES-20, six classes | Baseline recipe | Candidate recipe, both as image-only and image + metadata | The four run groups passed to `src.analyze` | When tuning |
 
 Optional comparisons to confirm include reduced metadata, three-class cohorts, and wrong metadata at inference. For each accepted comparison, record the feature list, member seeds, source revision, input artifact paths, and exclusion rules.
 
@@ -24,10 +24,11 @@ Apply the same settings to the image-only and multimodal setups.
 | Patient split | Two patient-disjoint folds. Each fold serves once as test, with validation drawn at the patient level from the other fold. |
 | Ensemble | Five members per setup per fold, with the same member seed list for both setups |
 | Image backbone | Trainable throughout fine-tuning |
-| Training loss | Class-weighted cross-entropy (`train.weighted_loss=true`), with inverse-frequency weights calculated from the training partition |
-| Early stopping | Enabled. Validation monitor, patience, and minimum improvement are TBD. Keep the best validation checkpoint. |
+| Training loss | Class-weighted cross-entropy (`train.weighted_loss=true`, `train.class_weight_power=1.0`). Weights are `(N / (K n_k))^power`, then rescaled to mean 1. Power 0 is unweighted. |
+| Early stopping | Minimize `val_loss`, patience 8, minimum improvement 0. Keep the best checkpoint, including epoch 1. |
 | Maximum training epochs | 30 per member |
-| Learning-rate scheduling | Enabled. Scheduler, parameters, and step timing are TBD. |
+| Learning-rate scheduling | AdamW at `1e-4`, weight decay `0.01`. `ReduceLROnPlateau` on the same monitor, factor 0.5, patience 3, minimum learning rate `1e-6`, stepped once per epoch after validation. |
+| Augmentation | Training only, after the patient split: resize to 224, horizontal and vertical flips at probability 0.5, rotation of 15 degrees with reflect padding. No crop and no color jitter. |
 
 Record the resolved settings for each run, including any deviations from these defaults.
 
@@ -41,7 +42,7 @@ For image $i$, let $y_i$ be the ground truth, $p_{imc}$ the probability assigned
 | Per-class precision, recall, F1 | $TP/(TP+FP)$, $TP/(TP+FN)$, and $2TP/(2TP+FP+FN)$, using one-vs-rest counts | %, with true class support |
 | Balanced accuracy | Mean per-class recall | %, higher is better |
 | Macro-F1 | Mean per-class F1 | %, higher is better |
-| Negative log-likelihood (NLL) | Mean of $-\log q_{i,y_i}$, flooring the true-class probability at **TBD** before taking the natural log | Nats, lower is better |
+| Negative log-likelihood (NLL) | Mean of $-\log q_{i,y_i}$, flooring the true-class probability at `1e-12` before the natural log. A probability of 1 is not clipped and contributes 0. | Nats, lower is better |
 | Multiclass Brier score | Mean across images of $\sum_c (q_{ic}-\mathbf{1}[y_i=c])^2$ | Sum over classes, lower is better |
 | Total uncertainty (predictive entropy) | $H(q_i)$, where $H(p)=-\sum_c p_c\log p_c$ and $0\log 0=0$ | Per image and image-weighted mean, nats |
 | Aleatoric uncertainty (mean member entropy) | Mean of $H(p_{im})$ across members for each image | Per image and image-weighted mean, nats |
@@ -50,7 +51,7 @@ For image $i$, let $y_i$ be the ground truth, $p_{imc}$ the probability assigned
 | Paired aleatoric uncertainty reduction | Image-only aleatoric uncertainty minus multimodal aleatoric uncertainty for each image | Mean and median in nats, relative reduction (%), and share of images with a reduction (%) |
 | Paired EU reduction (dEU) | Image-only EU minus multimodal EU for each image | Mean and median in nats, relative reduction (%), and share of images with a reduction (%) |
 
-Define zero-denominator handling and the class inclusion rule for macro averages when an evaluated fold lacks a class (**TBD**). Report paired classification changes as candidate minus reference in percentage points.
+Per-class precision, recall, and F1 use zero when a denominator is zero. Balanced accuracy and macro-F1 average only over classes that have at least one true image in the evaluated rows; a class absent from a fold is omitted rather than scored as zero. The confusion matrix still uses the full declared class order. Report paired classification changes as candidate minus reference in percentage points.
 
 For each uncertainty quantity, relative reduction is $100$ times the mean paired reduction divided by the mean image-only uncertainty over the same paired images. Report it as unavailable when the denominator is zero. The share of images with a reduction is $100$ times the number of strictly positive paired differences divided by the number of pairs. Positive differences indicate lower multimodal uncertainty. For other comparisons, use the declared reference and candidate in the same formulas.
 
@@ -102,14 +103,16 @@ outputs/result-analysis/
     total_vs_aleatoric_uncertainty.png
 ```
 
-- Use a distinct experiment ID when inputs or settings change. A rerun with the same inputs and settings regenerates the same paths. For per-comparison figures within an experiment, append the comparison ID to the filename before the extension.
+- Use a distinct experiment ID when inputs or settings change. A rerun with the same inputs and settings regenerates the same paths. For per-comparison figures within an experiment, append the comparison ID to the filename before the extension (`primary` for a single image-only versus metadata report; `baseline_modality`, `candidate_modality`, `image_only_change`, and `multimodal_change` for a recipe comparison).
+- `eval_split=val` compares validation predictions while tuning. `eval_split=test` is the final report and is the only mode that updates `summary/`.
+- A single-setup report sets `reference` and `candidate`. A recipe report sets `baseline_image`, `baseline_multimodal`, `candidate_image`, `candidate_multimodal`, and `candidate_label`. Do not set both forms at once.
 - Record the analysis source revision, input artifact paths, resolved experiment settings, class order, and metric conventions in `manifest.yaml`. Link the tables and figures from `REPORT.md`.
 - Write UTF-8 CSVs with explicit units in column names where applicable. Key paired rows by comparison, fold, and image ID. Key validation rows by setup, fold, member seed, and epoch.
-- Update the summary CSV by experiment ID and setup after both test folds complete. Regenerate F5 from that CSV so reruns replace the previous points for the same experiment.
+- Update the summary CSV by experiment ID and setup after every configured test fold is present and `eval_split=test`. Regenerate F5 from that CSV so reruns replace the previous points for the same experiment.
 
 ### Acceptance checks
 
 - Verify that paired rows, class counts, and metric values agree across tables and figures. Check that F2 panel counts sum to the paired image count and that F6 uses only epochs present in the member histories.
 - Check formulas on a small hand-calculated example. Identical member distributions yield zero disagreement, and identical conditions yield zero paired effects.
 
-Existing references: [uncertainty analysis plan](uncertainty_analysis.md) and [metadata experiment report](../outputs/metadata-experiment-analysis/REPORT.md).
+The generator is `src.analyze` with `configs/analyze.yaml`. It reads `{val,test}_member_predictions.npz` and member `history.csv` files produced by `src.train`.

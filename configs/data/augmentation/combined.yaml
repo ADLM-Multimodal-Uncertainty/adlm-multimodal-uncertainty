@@ -1,0 +1,11 @@
+# Later tuning candidate: conservative crop plus mild color jitter, on top of the baseline geometry.
+_target_: src.data.transforms.AugmentationConfig
+horizontal_flip: 0.5
+vertical_flip: 0.5
+rotation_degrees: 15
+crop_scale: [0.9, 1.0]
+crop_ratio: [0.95, 1.05]
+brightness: 0.10
+contrast: 0.10
+saturation: 0.05
+hue: 0.01
