@@ -26,7 +26,7 @@ Recommended `~/.ssh/config` on the laptop:
         User <cit-username>
         ServerAliveInterval 60
 
-`selene` is a login node: submit jobs, create environments, move files. Never train on it.
+`selene` is a login node. Use it to `git pull`, `sbatch`, `squeue`, `sacct`, `scancel`, and read logs. Do not train on it, and do not download or install there. `uv python install` and `uv sync` download large files, so they belong in `scripts/slurm/sync_env.sbatch`, not in an SSH session.
 
 ## 3. Storage
 
@@ -56,22 +56,16 @@ directly inside the chosen directory.
 
 ## 4. Environment
 
-    ml python/uv
-    cd /vol/miltank/users/$USER/code
-    git clone <repo-url> adlm-multimodal-uncertainty && cd adlm-multimodal-uncertainty
-    export UV_CACHE_DIR=/meta/users/$USER/.cache/uv
-    export UV_PYTHON_INSTALL_DIR=/vol/miltank/users/$USER/python
-    uv python install 3.12
-    uv venv --python "$(uv python find 3.12)"
-    uv sync                       # creates .venv from uv.lock; same env for all three of us
+On a laptop, clone and commit as usual. On selene, only update the checkout and submit the install job:
 
-Do not point the virtualenv at `/usr/bin/python3`. That binary is Python 3.12 on the login
-node and Python 3.10 on some compute nodes, so jobs then start without the project packages.
+    cd /vol/miltank/users/$USER/code/adlm-multimodal-uncertainty
+    git pull
+    mkdir -p /vol/miltank/users/$USER/outputs/slurm
+    sbatch scripts/slurm/sync_env.sbatch
 
-After every `git pull` on selene, refresh the environment before submitting:
+That CPU job installs CPython 3.12 under `/vol/miltank/users/$USER/python`, builds `.venv` against that exact file, and runs `uv sync --extra dev`. The download happens on a compute node. Submit it again after a lockfile change. Do not run `uv python install`, `uv venv`, or `uv sync` in the SSH session.
 
-    ml python/uv
-    uv sync --extra dev
+`/usr/bin/python3` is not one program. It is Python 3.12 on selene and Python 3.10 on some compute nodes, including ceres. A virtualenv linked to that path imports Hydra on the login node and then fails on those nodes with `ModuleNotFoundError: No module named 'hydra'`. `sync_env.sbatch` refuses an interpreter outside `/vol/miltank`.
 
 Put in `~/.bashrc` (that is allowed; it is a dotfile, not data):
 
@@ -111,8 +105,8 @@ Rules
 - Submit only a commit that has been pushed and pulled. The job prints that commit hash.
 
 Templates in `scripts/slurm/`:
-- `smoke_test.sbatch`: one short GPU job that prints `nvidia-smi`, imports torch, and runs pytest.
-  Run `uv sync --extra dev` on the login node first; the job uses `.venv/bin/python`.
+- `sync_env.sbatch`: one CPU job, no GPU. Installs the shared Python 3.12 and the project packages. Run this instead of `uv sync` on selene.
+- `smoke_test.sbatch`: one short GPU job that prints `nvidia-smi`, imports torch, and runs pytest. Submit it only after `sync_env.sbatch` has finished. The job uses `.venv/bin/python`.
 - `train.sbatch`: one training command. Pass Hydra overrides, including `experiment=` and `fold=`.
 - `fold_ensemble_array.sbatch`: one array task per fold (`--array=0-1%1`). Each task trains all five
   ensemble members of that fold and writes `members/seed_<s>/` plus the aggregated predictions.
@@ -160,12 +154,13 @@ Use this for stepping through a batch, not for training.
 - A CPU run of `python -m src.train` on a tiny subset (small images, one epoch) must finish in
   under a minute; this is the correctness check before every cluster run.
 - Tests: `uv run pytest -q`.
-- Commit, push, then on selene `git pull` and `uv sync --extra dev` before submitting.
-- Do not start another `master-queuesave` job while two are already pending or running.
+- Commit, push, then on selene `git pull`. If `uv.lock` changed, submit `scripts/slurm/sync_env.sbatch` and wait for it. Do not install on the login node.
+- Do not start another `master-queuesave` job while two are already pending or running. `sync_env.sbatch` counts as one of those two.
 
 ## 8. Checklist before any real run
 
-- [ ] Code committed and pushed; `git pull` and `uv sync --extra dev` done on selene.
+- [ ] Code committed and pushed; `git pull` done on selene. Packages were installed by `sbatch scripts/slurm/sync_env.sbatch`, not by a download in the SSH session.
+- [ ] `.venv/bin/python` points at `/vol/miltank/users/$USER/python/...`, not at `/usr/bin/python3`.
 - [ ] The job log will print that commit hash.
 - [ ] `ls -la ~` shows only dotfiles and symlinks, no data.
 - [ ] `du -sh /vol/miltank/users/$USER` is comfortably under the 500 GB group limit.

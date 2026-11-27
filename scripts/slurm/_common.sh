@@ -21,7 +21,7 @@ adlm_prepare_caches() {
     # dependencies. Always use the checkout's virtualenv.
     PYTHON="${PWD}/.venv/bin/python"
     if [[ ! -x "$PYTHON" ]]; then
-        echo "ERROR: $PYTHON not found. On the login node run: ml python/uv && uv sync" >&2
+        echo "ERROR: $PYTHON not found. Submit scripts/slurm/sync_env.sbatch from selene; do not uv sync on the login node." >&2
         return 1
     fi
     export PYTHON
