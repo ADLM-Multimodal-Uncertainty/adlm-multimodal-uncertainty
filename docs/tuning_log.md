@@ -9,5 +9,5 @@ Validation split decides later trials. Test metrics are recorded after a run is 
 - Image-only array: SLURM job `366958`, `--array=0-1%1`
 - Multimodal array: SLURM job `366959`, `--array=0-1%1`
 - QoS: `master-queuesave` (two jobs, one task from each array)
-- Status: submitted, not yet accepted
+- Status: fold 0 of both jobs failed in under a minute. The batch environment set `PYTHON` to system Python 3.10, which has no Hydra. Fold 1 was cancelled because it was the same code. The cluster scripts now force `.venv/bin/python`.
 - Output groups: `baseline_image_only`, `baseline_multimodal`

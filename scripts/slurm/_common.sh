@@ -17,7 +17,9 @@ adlm_prepare_caches() {
         "$OUTPUT_ROOT/slurm" "$OUTPUT_ROOT/runs"
 
     cd "${REPO_DIR:-/vol/miltank/users/${USER}/code/adlm-multimodal-uncertainty}"
-    PYTHON="${PYTHON:-.venv/bin/python}"
+    # Compute nodes often export PYTHON to the system interpreter, which has no project
+    # dependencies. Always use the checkout's virtualenv.
+    PYTHON="${PWD}/.venv/bin/python"
     if [[ ! -x "$PYTHON" ]]; then
         echo "ERROR: $PYTHON not found. On the login node run: ml python/uv && uv sync" >&2
         return 1
