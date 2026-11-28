@@ -168,8 +168,7 @@ sbatch scripts/slurm/fold_ensemble_array.sbatch \
 
 Compare recipes on the validation split. `val_nll` and `val_brier` in `history.csv` are
 unweighted, so they stay comparable when the class-weight power changes. `val_loss` is the
-weighted training objective and is the early-stopping signal. Record each decision in
-[docs/tuning_log.md](docs/tuning_log.md).
+weighted training objective and is the early-stopping signal.
 
 ## Cluster
 
@@ -224,7 +223,7 @@ configs/          data, augmentation, split, model, train, scheduler, ensemble, 
 src/              data, models, train, evaluate, metrics, uq, visualize, analysis
 scripts/local/    run.sh, smoke.sh, sync_cluster_runs.sh
 scripts/slurm/    fold_ensemble_array.sbatch, train.sbatch, smoke_test.sbatch, sync_env.sbatch
-docs/             implementation_spec.md, cluster_guide.md, design_decisions.md, tuning_log.md
+docs/             implementation_spec.md, cluster_guide.md, design_decisions.md
 ```
 
 ## Conventions
