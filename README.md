@@ -118,7 +118,11 @@ Each run writes `manifest.yaml`, `REPORT.md`, CSVs under `tables/` and `data/`, 
 under `figures/`. `REPORT.md` prints one pair of narrow tables per comparison: classification
 change as candidate minus reference, in percentage points, then total, aleatoric, and
 epistemic uncertainty as reference minus candidate, in nats. The wide columns stay in
-`tables/paired_effects.csv`.
+`tables/paired_effects.csv`. A recipe comparison also writes
+`tables/setting_uncertainty_change.csv` and `figures/setting_uncertainty_change.png`:
+dAU, dEU, and dTU are the baseline setting minus the candidate setting for image-only
+and for image + metadata, and d(dEU) is how the metadata EU reduction changes between
+those settings.
 
 Per-comparison figures append the comparison id (`primary` for the single report;
 `baseline_modality`, `candidate_modality`, `image_only_change`, and `multimodal_change` for

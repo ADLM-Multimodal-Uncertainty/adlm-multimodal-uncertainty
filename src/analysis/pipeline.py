@@ -23,6 +23,7 @@ from src.analysis.figures import (
     plot_deu_distribution,
     plot_effect_estimates,
     plot_paired_eu_scatter,
+    plot_setting_uncertainty_change,
     plot_total_vs_aleatoric,
     plot_validation_curves,
 )
@@ -313,6 +314,110 @@ def paired_effects_table(
     return pd.DataFrame(rows)
 
 
+_SETTING_CHANGE_IDS = (
+    "image_only_change",
+    "multimodal_change",
+    "baseline_modality",
+    "candidate_modality",
+)
+_SETTING_DELTAS = (
+    ("image_only_change", "aleatoric_reduction", "dAU_image_only", "dAU (image-only)"),
+    ("image_only_change", "epistemic_reduction", "dEU_image_only", "dEU (image-only)"),
+    ("image_only_change", "total_reduction", "dTU_image_only", "dTU (image-only)"),
+    ("multimodal_change", "aleatoric_reduction", "dAU_multimodal", "dAU (image + metadata)"),
+    ("multimodal_change", "epistemic_reduction", "dEU_multimodal", "dEU (image + metadata)"),
+    ("multimodal_change", "total_reduction", "dTU_multimodal", "dTU (image + metadata)"),
+)
+
+
+def setting_uncertainty_change(
+    paired: dict[str, pd.DataFrame], *, samples: int, seed: int
+) -> pd.DataFrame | None:
+    """Uncertainty change from the baseline setting to the candidate setting.
+
+    dTU, dAU, and dEU are baseline minus candidate. A positive value means the
+    candidate setting is more certain. d(dEU) is the candidate metadata EU
+    reduction minus the baseline metadata EU reduction. A positive value means
+    metadata reduces epistemic uncertainty by more under the candidate setting.
+    """
+    if any(key not in paired for key in _SETTING_CHANGE_IDS):
+        return None
+    rows = []
+    for offset, (comparison_id, column, quantity, label) in enumerate(_SETTING_DELTAS):
+        frame = paired[comparison_id]
+        quantity_name = column.removesuffix("_reduction")
+        stats = reduction_stats(
+            frame[f"reference_{quantity_name}"].to_numpy(),
+            frame[f"candidate_{quantity_name}"].to_numpy(),
+        )
+        _, low, high = patient_cluster_mean_ci(
+            frame["patient_id"].to_numpy(),
+            frame[column].to_numpy(),
+            samples=samples,
+            seed=seed + offset,
+        )
+        rows.append(_setting_change_row(quantity, label, frame, stats, low, high))
+
+    baseline = paired["baseline_modality"][
+        ["fold", "img_id", "patient_id", "epistemic_reduction"]
+    ].rename(columns={"epistemic_reduction": "baseline_deu"})
+    candidate = paired["candidate_modality"][["fold", "img_id", "epistemic_reduction"]].rename(
+        columns={"epistemic_reduction": "candidate_deu"}
+    )
+    joined = baseline.merge(candidate, on=["fold", "img_id"], how="outer", indicator=True)
+    if not (joined["_merge"] == "both").all():
+        raise ValueError("baseline and candidate modality effects do not share image IDs")
+    delta = joined["candidate_deu"].to_numpy() - joined["baseline_deu"].to_numpy()
+    denominator = float(np.mean(joined["baseline_deu"]))
+    relative: float | str = (
+        "unavailable" if denominator == 0 else 100.0 * float(delta.mean()) / denominator
+    )
+    _, low, high = patient_cluster_mean_ci(
+        joined["patient_id"].to_numpy(),
+        delta,
+        samples=samples,
+        seed=seed + len(_SETTING_DELTAS),
+    )
+    rows.append(
+        _setting_change_row(
+            "d_dEU",
+            "d(dEU)",
+            joined,
+            {
+                "mean_nats": float(delta.mean()),
+                "median_nats": float(np.median(delta)),
+                "relative_pct": relative,
+                "share_reduced_pct": 100.0 * float(np.mean(delta > 0)),
+            },
+            low,
+            high,
+        )
+    )
+    return pd.DataFrame(rows)
+
+
+def _setting_change_row(
+    quantity: str,
+    label: str,
+    frame: pd.DataFrame,
+    stats: dict,
+    low: float,
+    high: float,
+) -> dict:
+    return {
+        "quantity": quantity,
+        "label": label,
+        "paired_images": len(frame),
+        "paired_patients": int(frame["patient_id"].nunique()),
+        "mean_nats": stats["mean_nats"],
+        "median_nats": stats["median_nats"],
+        "relative_pct": stats["relative_pct"],
+        "share_positive_pct": stats["share_reduced_pct"],
+        "ci_low_nats": low,
+        "ci_high_nats": high,
+    }
+
+
 def class_breakdown_table(
     conditions: list[Condition], comparisons: list[Comparison], paired: dict[str, pd.DataFrame]
 ) -> pd.DataFrame:
@@ -547,6 +652,23 @@ def _paired_effects_markdown(effects: pd.DataFrame) -> str:
     return "\n\n".join(blocks)
 
 
+def _setting_change_markdown(change: pd.DataFrame) -> str:
+    rows = [
+        [
+            record["label"],
+            record["mean_nats"],
+            record["median_nats"],
+            record["relative_pct"],
+            record["share_positive_pct"],
+        ]
+        for record in change.to_dict(orient="records")
+    ]
+    return _markdown_rows(
+        ["Quantity", "Mean (nats)", "Median (nats)", "Relative (%)", "Share positive (%)"],
+        rows,
+    )
+
+
 def _write_report(
     path: Path,
     experiment_id: str,
@@ -555,6 +677,7 @@ def _write_report(
     performance: pd.DataFrame,
     effects: pd.DataFrame,
     figure_names: list[str],
+    setting_change: pd.DataFrame | None = None,
 ) -> None:
     pooled = performance[performance["fold"] == "pooled"]
     lines = [
@@ -604,6 +727,25 @@ def _write_report(
         "",
         _paired_effects_markdown(effects),
         "",
+    ]
+    if setting_change is not None:
+        lines += [
+            "## Uncertainty change between settings",
+            "",
+            "These rows compare the candidate setting with the baseline setting. "
+            "They are not the image-only versus metadata effect. "
+            "dAU, dEU, and dTU are baseline minus candidate, in nats: "
+            "a positive value means the candidate setting is more certain. "
+            "d(dEU) is the candidate metadata EU reduction minus the baseline metadata "
+            "EU reduction: a positive value means metadata reduces epistemic uncertainty "
+            "by more under the candidate setting. "
+            "Relative change uses the baseline mean as the denominator. "
+            "Share positive is the percentage of images with a strictly positive value.",
+            "",
+            _setting_change_markdown(setting_change),
+            "",
+        ]
+    lines += [
         "## Figures",
         "",
     ]
@@ -765,6 +907,9 @@ def run_analysis(cfg: DictConfig) -> Path:
     cohort = cohort_table(comparisons, paired)
     performance = performance_table(conditions)
     effects = paired_effects_table(comparisons, paired)
+    setting_change = setting_uncertainty_change(
+        paired, samples=int(cfg.bootstrap_samples), seed=int(cfg.bootstrap_seed)
+    )
     classes = class_breakdown_table(conditions, comparisons, paired)
     history = load_validation_history(conditions)
     paired_frame.to_csv(output / "data" / "paired_images.csv", index=False)
@@ -772,6 +917,8 @@ def run_analysis(cfg: DictConfig) -> Path:
     cohort.to_csv(output / "tables" / "cohort_and_pairing.csv", index=False)
     performance.to_csv(output / "tables" / "performance_and_uncertainty.csv", index=False)
     effects.to_csv(output / "tables" / "paired_effects.csv", index=False)
+    if setting_change is not None:
+        setting_change.to_csv(output / "tables" / "setting_uncertainty_change.csv", index=False)
     classes.to_csv(output / "tables" / "class_breakdown.csv", index=False)
 
     figure_names = []
@@ -799,6 +946,11 @@ def run_analysis(cfg: DictConfig) -> Path:
     figure_names.extend(
         ["confusion_matrices.png", "paired_effect_estimates.png", "validation_curves.png"]
     )
+    if setting_change is not None:
+        plot_setting_uncertainty_change(
+            setting_change, badge, output / "figures" / "setting_uncertainty_change.png"
+        )
+        figure_names.append("setting_uncertainty_change.png")
 
     manifest = {
         "experiment_id": experiment_id,
@@ -814,6 +966,17 @@ def run_analysis(cfg: DictConfig) -> Path:
             "macro_average": "classes with support only",
             "zero_division": 0,
             "relative_reduction": "unavailable when the reference mean is 0",
+            **(
+                {
+                    "setting_uncertainty_change": (
+                        "dTU, dAU, and dEU are baseline minus candidate; "
+                        "d_dEU is the candidate metadata EU reduction minus "
+                        "the baseline metadata EU reduction"
+                    )
+                }
+                if setting_change is not None
+                else {}
+            ),
         },
         "conditions": [
             {
@@ -836,7 +999,14 @@ def run_analysis(cfg: DictConfig) -> Path:
     }
     OmegaConf.save(OmegaConf.create(manifest), output / "manifest.yaml", resolve=True)
     _write_report(
-        output / "REPORT.md", experiment_id, badge, comparisons, performance, effects, figure_names
+        output / "REPORT.md",
+        experiment_id,
+        badge,
+        comparisons,
+        performance,
+        effects,
+        figure_names,
+        setting_change,
     )
     if split == "test":
         _update_summary(Path(cfg.analysis_root) / "summary", experiment_id, performance)

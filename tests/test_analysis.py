@@ -9,7 +9,7 @@ from omegaconf import OmegaConf
 
 from src import CLASSES, meaningful_overrides
 from src.analysis.effects import quadrant_counts, reduction_stats
-from src.analysis.pipeline import run_analysis
+from src.analysis.pipeline import run_analysis, setting_uncertainty_change
 from src.data.transforms import AugmentationConfig, image_transform
 from src.metrics import PROBABILITY_FLOOR, brier_score, nll
 from src.train import class_weights
@@ -201,6 +201,8 @@ def test_single_setup_report_matches_the_hand_calculated_example(tmp_path):
     report = (output / "REPORT.md").read_text(encoding="utf-8")
     assert "Share reduced (%)" in report
     assert "mean_epistemic_uncertainty_reduction_nats" not in report
+    assert "Uncertainty change between settings" not in report
+    assert not (output / "tables" / "setting_uncertainty_change.csv").exists()
     assert "Δ bal. acc. (pp)" in report
     for name in (
         "paired_eu_scatter_primary.png",
@@ -267,4 +269,100 @@ def test_baseline_versus_candidate_report_writes_four_comparisons(tmp_path):
     assert len(list((output / "figures").glob("paired_eu_scatter_*.png"))) == 4
     assert len(list((output / "figures").glob("paired_deu_candles_*.png"))) == 4
     assert "Crop and zoom modality effect" in (output / "REPORT.md").read_text(encoding="utf-8")
+    report = (output / "REPORT.md").read_text(encoding="utf-8")
+    assert "d(dEU)" in report
+    assert "Uncertainty change between settings" in report
+    change = pd.read_csv(output / "tables" / "setting_uncertainty_change.csv")
+    assert list(change["quantity"]) == [
+        "dAU_image_only",
+        "dEU_image_only",
+        "dTU_image_only",
+        "dAU_multimodal",
+        "dEU_multimodal",
+        "dTU_multimodal",
+        "d_dEU",
+    ]
+    assert change["mean_nats"].abs().max() == 0
+    assert set(change["relative_pct"]) == {"unavailable"}
+    blob = (output / "figures" / "setting_uncertainty_change.png").read_bytes()
+    assert blob.startswith(PNG_MAGIC)
     assert not (tmp_path / "result-analysis" / "summary" / "experiment_uncertainty.csv").exists()
+
+
+def test_setting_uncertainty_change_matches_a_hand_calculation():
+    image = pd.DataFrame(
+        {
+            "fold": [0, 0],
+            "img_id": ["a", "b"],
+            "patient_id": ["p0", "p1"],
+            "reference_aleatoric": [1.0, 0.2],
+            "candidate_aleatoric": [0.5, 0.2],
+            "reference_epistemic": [0.4, 0.2],
+            "candidate_epistemic": [0.1, 0.4],
+            "reference_total": [1.4, 0.4],
+            "candidate_total": [0.6, 0.6],
+            "aleatoric_reduction": [0.5, 0.0],
+            "epistemic_reduction": [0.3, -0.2],
+            "total_reduction": [0.8, -0.2],
+        }
+    )
+    multimodal = pd.DataFrame(
+        {
+            "fold": [0, 0],
+            "img_id": ["a", "b"],
+            "patient_id": ["p0", "p1"],
+            "reference_aleatoric": [0.8, 0.6],
+            "candidate_aleatoric": [0.4, 0.1],
+            "reference_epistemic": [0.2, 0.1],
+            "candidate_epistemic": [0.2, 0.1],
+            "reference_total": [1.0, 0.7],
+            "candidate_total": [0.6, 0.2],
+            "aleatoric_reduction": [0.4, 0.5],
+            "epistemic_reduction": [0.0, 0.0],
+            "total_reduction": [0.4, 0.5],
+        }
+    )
+    baseline_modality = pd.DataFrame(
+        {
+            "fold": [0, 0],
+            "img_id": ["a", "b"],
+            "patient_id": ["p0", "p1"],
+            "epistemic_reduction": [0.2, 0.1],
+        }
+    )
+    candidate_modality = pd.DataFrame(
+        {
+            "fold": [0, 0],
+            "img_id": ["a", "b"],
+            "patient_id": ["p0", "p1"],
+            "epistemic_reduction": [-0.1, 0.3],
+        }
+    )
+    change = setting_uncertainty_change(
+        {
+            "image_only_change": image,
+            "multimodal_change": multimodal,
+            "baseline_modality": baseline_modality,
+            "candidate_modality": candidate_modality,
+        },
+        samples=0,
+        seed=0,
+    )
+    assert change is not None
+    by_quantity = change.set_index("quantity")
+    assert by_quantity.loc["dAU_image_only", "mean_nats"] == pytest.approx(0.25)
+    assert by_quantity.loc["dEU_image_only", "mean_nats"] == pytest.approx(0.05)
+    assert by_quantity.loc["dTU_image_only", "mean_nats"] == pytest.approx(0.3)
+    assert by_quantity.loc["dAU_image_only", "mean_nats"] + by_quantity.loc[
+        "dEU_image_only", "mean_nats"
+    ] == pytest.approx(by_quantity.loc["dTU_image_only", "mean_nats"])
+    assert by_quantity.loc["dEU_multimodal", "mean_nats"] == pytest.approx(0.0)
+    assert by_quantity.loc["d_dEU", "mean_nats"] == pytest.approx(-0.05)
+    assert by_quantity.loc["d_dEU", "mean_nats"] == pytest.approx(
+        by_quantity.loc["dEU_multimodal", "mean_nats"]
+        - by_quantity.loc["dEU_image_only", "mean_nats"]
+    )
+    assert by_quantity.loc["dAU_image_only", "relative_pct"] == pytest.approx(100.0 * 0.25 / 0.6)
+    assert by_quantity.loc["d_dEU", "relative_pct"] == pytest.approx(100.0 * -0.05 / 0.15)
+    assert by_quantity.loc["d_dEU", "share_positive_pct"] == pytest.approx(50.0)
+    assert setting_uncertainty_change({"primary": image}, samples=0, seed=0) is None

@@ -260,6 +260,41 @@ def plot_validation_curves(history: pd.DataFrame, path: Path) -> Path:
     return _save(fig, path)
 
 
+def plot_setting_uncertainty_change(change: pd.DataFrame, badge: str, path: Path) -> Path:
+    """Bars for dAU, dEU, and dTU of each setup, then d(dEU)."""
+    labels = change["label"].tolist()
+    means = change["mean_nats"].to_numpy(dtype=np.float64)
+    low = change["ci_low_nats"].to_numpy(dtype=np.float64)
+    high = change["ci_high_nats"].to_numpy(dtype=np.float64)
+    colors = [
+        "C2" if quantity == "d_dEU" else "C0" if quantity.endswith("image_only") else "C1"
+        for quantity in change["quantity"]
+    ]
+    fig = Figure(figsize=(10.2, max(4.2, 0.48 * len(change) + 1.8)), layout="constrained")
+    ax = fig.subplots()
+    positions = np.arange(len(change))
+    ax.barh(
+        positions,
+        means,
+        xerr=[np.maximum(means - low, 0), np.maximum(high - means, 0)],
+        color=colors,
+        alpha=0.9,
+    )
+    ax.axvline(0, color="black", linewidth=1)
+    ax.set_yticks(positions, labels)
+    ax.invert_yaxis()
+    ax.set(xlabel="Mean change (nats)")
+    fig.suptitle(
+        f"Uncertainty change between settings\n{badge}; 95% patient-cluster intervals\n"
+        "dAU, dEU, dTU: baseline minus candidate "
+        "(positive: candidate more certain)\n"
+        "d(dEU): change in the metadata EU reduction",
+        fontsize=11,
+    )
+    ax.grid(axis="x", alpha=0.3)
+    return _save(fig, path)
+
+
 def plot_total_vs_aleatoric(summary: pd.DataFrame, path: Path) -> Path:
     fig = Figure(figsize=(7.2, 5.4), layout="constrained")
     ax = fig.subplots()

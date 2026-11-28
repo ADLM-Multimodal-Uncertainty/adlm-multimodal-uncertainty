@@ -50,10 +50,12 @@ For image $i$, let $y_i$ be the ground truth, $p_{imc}$ the probability assigned
 | Paired total uncertainty reduction | Image-only total uncertainty minus multimodal total uncertainty for each image | Mean and median in nats, relative reduction (%), and share of images with a reduction (%) |
 | Paired aleatoric uncertainty reduction | Image-only aleatoric uncertainty minus multimodal aleatoric uncertainty for each image | Mean and median in nats, relative reduction (%), and share of images with a reduction (%) |
 | Paired EU reduction (dEU) | Image-only EU minus multimodal EU for each image | Mean and median in nats, relative reduction (%), and share of images with a reduction (%) |
+| Setting change dAU, dEU, dTU | For one setup, baseline uncertainty minus candidate-setting uncertainty on each image | Mean and median in nats, relative to the baseline mean (%), and share of images with a positive change (%). Separate rows for image-only and image + metadata |
+| Change in the metadata EU reduction, d(dEU) | Candidate-setting dEU minus baseline-setting dEU on each image | Same summaries. Positive means metadata reduces EU by more under the candidate setting |
 
 Per-class precision, recall, and F1 use zero when a denominator is zero. Balanced accuracy and macro-F1 average only over classes that have at least one true image in the evaluated rows; a class absent from a fold is omitted rather than scored as zero. The confusion matrix still uses the full declared class order. Report paired classification changes as candidate minus reference in percentage points.
 
-For each uncertainty quantity, relative reduction is $100$ times the mean paired reduction divided by the mean image-only uncertainty over the same paired images. Report it as unavailable when the denominator is zero. The share of images with a reduction is $100$ times the number of strictly positive paired differences divided by the number of pairs. Positive differences indicate lower multimodal uncertainty. For other comparisons, use the declared reference and candidate in the same formulas.
+For each uncertainty quantity, relative reduction is $100$ times the mean paired reduction divided by the mean reference uncertainty over the same paired images. Report it as unavailable when the denominator is zero. The share of images with a reduction is $100$ times the number of strictly positive paired differences divided by the number of pairs. Positive differences indicate lower candidate uncertainty. For a recipe comparison, dAU, dEU, and dTU use the baseline setting as the reference and the candidate setting as the candidate, separately for image-only and image + metadata. d(dEU) is the candidate metadata EU reduction minus the baseline metadata EU reduction.
 
 ## 3. Tables
 
@@ -62,6 +64,7 @@ For each uncertainty quantity, relative reduction is $100$ times the mean paired
 | T1 Cohort and pairing | Core | Comparison × fold, plus pooled | Reference and candidate run IDs, ensemble size, paired image and patient counts, class counts |
 | T2 Performance and uncertainty | Core | Condition × fold, plus pooled | Accuracy, balanced accuracy, macro-F1, NLL, Brier, mean total uncertainty, mean aleatoric uncertainty, mean EU |
 | T3 Paired effects | Core | Comparison | Paired counts, change in balanced accuracy and macro-F1, and for total, aleatoric, and epistemic uncertainty: mean and median reduction in nats, relative reduction (%), and share of images with a reduction (%). `paired_effects.csv` keeps these as wide columns. `REPORT.md` prints one narrow block per comparison: a four-column classification row, then a five-column uncertainty table with rows Total, Aleatoric, and Epistemic. |
+| T3b Setting uncertainty change | Core for a recipe comparison | One row per between-setting quantity | `setting_uncertainty_change.csv`: dAU, dEU, and dTU for image-only and for image + metadata, then d(dEU). Mean, median, relative change, share positive, and the patient-cluster interval. A single image-versus-metadata report does not write this table. |
 | T4 Class breakdown | Supporting | Condition × true class | Support, precision, recall, F1. Include per-class dEU and paired counts in comparison rows if selected. |
 
 ## 4. Figures
@@ -73,6 +76,7 @@ For each uncertainty quantity, relative reduction is $100$ times the mean paired
 | F2 candles | Core | dEU candles for the same four groups | Same group order as F2, one box per group. dEU in nats on y, a zero line, and the image count in the category label. The box is the quartile range, whiskers are 1.5 IQR, fliers are images outside the whiskers, and a diamond marks the mean. |
 | F3 | Core | Confusion matrices | True class on rows, predicted class on columns, with shared class order and color scale. Normalize by true-class support and annotate raw counts. |
 | F4 | Supporting | Paired effect estimates | Comparison or class on y, mean dEU in nats on x, with a zero line. |
+| F7 | Core for a recipe comparison | Uncertainty change between settings | dAU, dEU, and dTU for each setup, then d(dEU), in nats on x. A zero line. Bars are 95% patient-cluster intervals. |
 | F5 | Core | Total versus aleatoric uncertainty across experiments | Mean total uncertainty on x and mean aleatoric uncertainty on y, both in nats. Add one point per setup per completed experiment using pooled held-out predictions. Identify the experiment and setup for each point and regenerate the scatter after every completed experiment. |
 | F6 | Core | Validation curves | Side-by-side panels for validation loss versus epoch and validation accuracy (%) versus epoch. Plot both setups in each panel. Use member histories matched by fold and seed. Show individual traces and a setup mean at each observed epoch, with contributing member counts where early stopping changes coverage. |
 
@@ -90,6 +94,7 @@ outputs/result-analysis/
       performance_and_uncertainty.csv
       paired_effects.csv
       class_breakdown.csv
+      setting_uncertainty_change.csv
     data/
       paired_images.csv
       validation_history.csv
@@ -100,6 +105,7 @@ outputs/result-analysis/
       confusion_matrices.png
       paired_effect_estimates.png
       validation_curves.png
+      setting_uncertainty_change.png
   summary/
     experiment_uncertainty.csv
     total_vs_aleatoric_uncertainty.png
@@ -107,7 +113,7 @@ outputs/result-analysis/
 
 - Use a distinct experiment ID when inputs or settings change. A rerun with the same inputs and settings regenerates the same paths. For per-comparison figures within an experiment, append the comparison ID to the filename before the extension (`primary` for a single image-only versus metadata report; `baseline_modality`, `candidate_modality`, `image_only_change`, and `multimodal_change` for a recipe comparison).
 - `eval_split=val` compares validation predictions while tuning. `eval_split=test` is the final report and is the only mode that updates `summary/`.
-- A single-setup report sets `reference` and `candidate`. A recipe report sets `baseline_image`, `baseline_multimodal`, `candidate_image`, `candidate_multimodal`, and `candidate_label`. Do not set both forms at once.
+- A single-setup report sets `reference` and `candidate`. A recipe report sets `baseline_image`, `baseline_multimodal`, `candidate_image`, `candidate_multimodal`, and `candidate_label`. Do not set both forms at once. `setting_uncertainty_change.csv` and its figure are written only for a recipe report.
 - Record the analysis source revision, input artifact paths, resolved experiment settings, class order, and metric conventions in `manifest.yaml`. Link the tables and figures from `REPORT.md`.
 - Write UTF-8 CSVs with explicit units in column names where applicable. Key paired rows by comparison, fold, and image ID. Key validation rows by setup, fold, member seed, and epoch.
 - Update the summary CSV by experiment ID and setup after every configured test fold is present and `eval_split=test`. Regenerate F5 from that CSV so reruns replace the previous points for the same experiment.
