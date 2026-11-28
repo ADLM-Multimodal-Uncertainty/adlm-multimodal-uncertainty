@@ -31,4 +31,29 @@ Members still overfit after the selected epoch: training accuracy climbs above 9
 - Image-only job `367016`, run group `power_0.5_image_only`.
 - Multimodal job `367017`, run group `power_0.5_multimodal`.
 - Same commit `126d38d`, `--array=0-1%1`, `master-queuesave`.
-- Status: submitted. Trials used: 1 of 10.
+- Both folds completed. Image-only `367016` took 34 and 31 minutes on `prometheus`. Multimodal `367017` took 27 and 29 minutes on `ceres`. Error logs were empty.
+- All 20 members had finite validation loss and accuracy. Every best validation loss beat epoch 1. Early stopping kept that best epoch, after 12–19 epochs. Accuracy was not constant.
+- Report: `outputs/result-analysis/power_0.5_vs_baseline` on the validation split (463 images, 276 patients).
+
+## Trial 1 result
+
+Rejected. The current best stays the accepted baseline (`class_weight_power=1.0`).
+
+Validation, pooled:
+
+- Image-only: accuracy 73.2%, balanced accuracy 62.7%, macro-F1 64.8%, NLL 0.808, Brier 0.406, epistemic uncertainty 0.094 nats.
+- Image + metadata: accuracy 71.5%, balanced accuracy 59.1%, macro-F1 61.9%, NLL 0.777, Brier 0.395, epistemic uncertainty 0.087 nats.
+
+Against the baseline, balanced accuracy fell by 4.7 percentage points for image-only and 8.6 for image + metadata. Macro-F1 fell by 0.6 and 5.2. Accuracy, NLL, and Brier improved. That is a shift toward the common classes: SCC F1 fell from 28.9% to 17.0% (image-only) and from 22.5% to 9.1% (image + metadata); melanoma recall fell from 80% to 60% and 50%.
+
+Metadata no longer helps classification. Balanced accuracy changed by −3.6 percentage points and macro-F1 by −3.0. Mean epistemic uncertainty fell by only 0.007 nats (7% relative, 54% of images), against 0.018 nats (17%, 62%) on the baseline.
+
+Power 0 would weaken the rare-class weights further, so that axis stops here. Training accuracy still ends near 98% while the selected validation accuracy stays near 65–73%. The next trial lowers the learning rate on the accepted baseline.
+
+## Trial 2: learning rate 3e-5
+
+- Change from the accepted baseline: `train.optimizer.lr=3e-5` only. Class-weight power stays 1.0.
+- Image-only job `367028`, run group `lr_3e-5_image_only`.
+- Multimodal job `367029`, run group `lr_3e-5_multimodal`.
+- Commit `14e993e` on the cluster, `--array=0-1%1`, `master-queuesave`. Training code is unchanged from `126d38d`.
+- Status: submitted. Trials used: 2 of 10.

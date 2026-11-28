@@ -33,5 +33,7 @@ __pycache__/
 *.ovpn
 auth.txt
 
+docs/tuning_log.md
+
 # Local copy of the PAD-UFES-20 metadata (public repo: not committed)
 /metadata/
